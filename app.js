@@ -45,6 +45,7 @@ function getNormalizedCategoryScores(comp) {
 
 // Will be loaded dynamically from data.json
 let companiesData = [];
+let localCompanies = [];
 
 // Chart Instances
 let tradeGradeChartInstance = null;
@@ -53,20 +54,39 @@ let radarChart = null;
 
 // DOM Ready
 document.addEventListener("DOMContentLoaded", () => {
-    fetch('data.json')
-        .then(response => response.json())
-        .then(data => {
-            companiesData = data;
-            initApp();
-            setupThemeToggle();
-        })
-        .catch(error => {
-            console.error("Error loading company data:", error);
-            // Fallback empty array
-            companiesData = [];
-            initApp();
-            setupThemeToggle();
-        });
+    // Load local companies
+    try {
+        localCompanies = JSON.parse(localStorage.getItem("local_companies") || "[]");
+    } catch (e) {
+        console.error("Failed to parse local_companies from localStorage", e);
+        localCompanies = [];
+    }
+
+    const processData = (data) => {
+        const localIds = new Set(localCompanies.map(c => c.id));
+        companiesData = [
+            ...localCompanies,
+            ...data.filter(c => !localIds.has(c.id))
+        ];
+        initApp();
+        setupThemeToggle();
+        setupUploadModal();
+    };
+
+    if (window.companiesData && window.companiesData.length > 0) {
+        // Load directly from data.js (prevents CORS issues on file:// protocol)
+        processData(window.companiesData);
+    } else {
+        fetch('data.json')
+            .then(response => response.json())
+            .then(data => {
+                processData(data);
+            })
+            .catch(error => {
+                console.error("Error loading company data:", error);
+                processData([]);
+            });
+    }
 });
 
 // App Initialization
@@ -179,13 +199,15 @@ function populateCompanySelect(filterTrade = "all", searchText = "") {
 function renderTradeGradeChart() {
     const ctx = document.getElementById('tradeCombinedChart').getContext('2d');
     
-    // Find selected company's trade
+    // Find selected company's trade and safety grade
     const select1 = document.getElementById("company-select-1");
     let selectedTrade = "";
+    let selectedGrade = "";
     if (select1 && select1.value) {
         const comp = companiesData.find(c => c.id === select1.value);
         if (comp) {
             selectedTrade = comp.trade;
+            selectedGrade = getUnifiedGrade(getNormalizedSafetyScore(comp));
         }
     }
     
@@ -244,10 +266,9 @@ function renderTradeGradeChart() {
         afterDatasetsDraw(chart) {
             const { ctx } = chart;
             ctx.save();
-            ctx.font = 'bold 10px "Outfit", "Noto Sans KR", sans-serif';
+            ctx.font = 'bold 9.5px "Outfit", "Noto Sans KR", sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
-            ctx.fillStyle = '#ffffff'; // White text for high contrast inside the bars
 
             const dataset = chart.data.datasets[0];
             const meta = chart.getDatasetMeta(0);
@@ -258,7 +279,9 @@ function renderTradeGradeChart() {
                     const gradeName = chart.data.labels[index];
                     const avg = gradesAverages[gradeName];
                     if (avg !== null) {
-                        // Draw inside the bottom of the bar (slightly above the base line of the bar)
+                        ctx.fillStyle = '#ffffff';
+                        // Draw '평균' and '[avg]점' on separate lines inside the bar
+                        ctx.fillText(`평균`, bar.x, bar.base - 18);
                         ctx.fillText(`${avg}점`, bar.x, bar.base - 6);
                     }
                 }
@@ -267,22 +290,71 @@ function renderTradeGradeChart() {
         }
     };
 
+    // Color definitions for safety grades
+    const baseColors = {
+        "1등급": '#3b82f6',
+        "2등급": '#10b981',
+        "3등급": '#60a5fa',
+        "4등급": '#f59e0b',
+        "5등급": '#fb923c',
+        "6등급": '#ef4444',
+        "7등급": '#b91c1c'
+    };
+
+    const keys = Object.keys(gradesCount);
+    const bgColorsArray = keys.map(g => baseColors[g]);
+
+    // Red dashed outline plugin to encompass the selected grade bar and its X-axis label
+    const activeGradeRedBorderPlugin = {
+        id: 'activeGradeRedBorder',
+        afterDatasetsDraw(chart) {
+            if (!selectedGrade) return;
+            const { ctx, scales: { x } } = chart;
+            const meta = chart.getDatasetMeta(0);
+            const index = chart.data.labels.indexOf(selectedGrade);
+            
+            if (index !== -1) {
+                const count = chart.data.datasets[0].data[index];
+                const bar = meta.data[index];
+                
+                // fallback positioning if the bar height is 0 (no companies in that grade)
+                const barY = (count > 0 && bar) ? bar.y : x.top;
+                const barX = (count > 0 && bar) ? bar.x : x.getPixelForValue(index);
+                const barW = (count > 0 && bar) ? bar.width : 45;
+                
+                // Safely clamp coordinates to remain strictly within the canvas bounds
+                const boxTop = Math.max(3, barY - 8);
+                const boxBottom = Math.min(chart.height - 3, x.bottom + 4);
+                const boxLeft = Math.max(3, barX - barW / 1.3);
+                const boxRight = Math.min(chart.width - 3, barX + barW / 1.3);
+                const boxWidth = boxRight - boxLeft;
+                const boxHeight = boxBottom - boxTop;
+                
+                ctx.save();
+                ctx.strokeStyle = '#dc2626'; // Premium Crimson Red
+                ctx.lineWidth = 2.2;
+                ctx.setLineDash([5, 4]); // Clean dashed styling
+                
+                ctx.beginPath();
+                if (ctx.roundRect) {
+                    ctx.roundRect(boxLeft, boxTop, boxWidth, boxHeight, 6);
+                } else {
+                    ctx.rect(boxLeft, boxTop, boxWidth, boxHeight);
+                }
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+    };
+
     tradeGradeChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: Object.keys(gradesCount),
+            labels: keys,
             datasets: [{
                 label: '업체 수 (개)',
                 data: Object.values(gradesCount),
-                backgroundColor: [
-                    '#3b82f6', // 1등급
-                    '#10b981', // 2등급
-                    '#60a5fa', // 3등급
-                    '#f59e0b', // 4등급
-                    '#fb923c', // 5등급
-                    '#ef4444', // 6등급
-                    '#b91c1c'  // 7등급
-                ],
+                backgroundColor: bgColorsArray,
                 borderRadius: 4,
                 barPercentage: 0.55
             }]
@@ -292,7 +364,10 @@ function renderTradeGradeChart() {
             maintainAspectRatio: false,
             layout: {
                 padding: {
-                    top: 15 // Ensure space for the top text
+                    top: 25,
+                    bottom: 15,
+                    left: 10,
+                    right: 10
                 }
             },
             plugins: {
@@ -350,7 +425,7 @@ function renderTradeGradeChart() {
                 }
             }
         },
-        plugins: [averageLabelsPlugin]
+        plugins: [averageLabelsPlugin, activeGradeRedBorderPlugin]
     });
 }
 
@@ -363,14 +438,7 @@ function renderPositioningMap(selectedTrade) {
         ? companiesData 
         : companiesData.filter(c => c.trade === selectedTrade);
 
-    // Filter out outliers whose scores fall far below the chart bounds (e.g. x < 60 or y < 60)
-    // to prevent overlaps with scale/axis labels. E.g., "(주)한강토건" has raw scores that place it low.
-    filtered = filtered.filter(c => {
-        const normScores = getNormalizedCategoryScores(c);
-        const preventionSystem = Math.round((normScores.management + normScores.system + normScores.risk) / 3);
-        const performance = normScores.performance;
-        return preventionSystem >= 60 && performance >= 60;
-    });
+    // Keep all companies in the positioning map regardless of scores to avoid missing companies
 
     const scatterData = filtered.map(c => {
         const normScores = getNormalizedCategoryScores(c);
@@ -383,6 +451,45 @@ function renderPositioningMap(selectedTrade) {
             id: c.id
         };
     });
+
+    // Sort scatterData so that the selected company is rendered last (drawn on top of others)
+    const currentSelectedId = document.getElementById("company-select-1")?.value;
+    scatterData.sort((a, b) => {
+        if (a.id === currentSelectedId) return 1;
+        if (b.id === currentSelectedId) return -1;
+        return 0;
+    });
+
+    // Determine the optimal view limits based on selected company's quadrant to focus the view
+    let minX = 0, maxX = 104;
+    let minY = 0, maxY = 104;
+    if (currentSelectedId) {
+        const selectedComp = filtered.find(c => c.id === currentSelectedId);
+        if (selectedComp) {
+            const normScores = getNormalizedCategoryScores(selectedComp);
+            const prevSystem = Math.round((normScores.management + normScores.system + normScores.risk) / 3);
+            const perf = normScores.performance;
+            
+            // Dynamic Zooming based on quadrant of selected company
+            if (prevSystem >= 80 && perf >= 80) {
+                // Top Right (안전 최우수 파트너)
+                minX = 60; maxX = 104;
+                minY = 60; maxY = 104;
+            } else if (prevSystem < 80 && perf >= 80) {
+                // Top Left (성과 우수 / 체계 보완)
+                minX = 40; maxX = 90;
+                minY = 60; maxY = 104;
+            } else if (prevSystem < 80 && perf < 80) {
+                // Bottom Left (안전 집중 관리 대상)
+                minX = 40; maxX = 90;
+                minY = 0; maxY = 90;
+            } else {
+                // Bottom Right (체계 우수 / 성과 보완)
+                minX = 60; maxX = 104;
+                minY = 0; maxY = 90;
+            }
+        }
+    }
 
     const isDark = document.body.classList.contains("dark-theme");
     const textColor = isDark ? '#9ca3af' : '#4b5563';
@@ -456,7 +563,7 @@ function renderPositioningMap(selectedTrade) {
     const pointLabelsPlugin = {
         id: 'pointLabels',
         afterDatasetsDraw(chart, args, options) {
-            const {ctx, chartArea: {right, left}} = chart;
+            const {ctx, chartArea: {right, left, top, bottom}} = chart;
             ctx.save();
             ctx.font = 'bold 11px "Outfit", "Noto Sans KR", sans-serif';
             ctx.textBaseline = 'middle';
@@ -490,9 +597,9 @@ function renderPositioningMap(selectedTrade) {
             // Pre-calculate label dimensions and default drawing boxes
             labelsToDraw.forEach(item => {
                 if (item.isSelected) {
-                    ctx.font = 'bold 12px "Outfit", "Noto Sans KR", sans-serif';
+                    ctx.font = 'bold 11.5px "Outfit", "Noto Sans KR", sans-serif';
                 } else {
-                    ctx.font = '500 11px "Outfit", "Noto Sans KR", sans-serif';
+                    ctx.font = '500 10px "Outfit", "Noto Sans KR", sans-serif';
                 }
                 const textWidth = ctx.measureText(item.label).width;
                 item.width = textWidth;
@@ -507,11 +614,11 @@ function renderPositioningMap(selectedTrade) {
                 
                 // Bounding box dimensions
                 item.boxW = textWidth + item.padding;
-                item.boxH = 15; // height of label box
+                item.boxH = 13; // height of label box (reduced slightly to fit more)
             });
             
             // Iterative collision resolution (run multiple passes to resolve chained overlaps)
-            for (let pass = 0; pass < 5; pass++) {
+            for (let pass = 0; pass < 25; pass++) {
                 let collisionsResolved = 0;
                 for (let i = 0; i < labelsToDraw.length; i++) {
                     for (let j = i + 1; j < labelsToDraw.length; j++) {
@@ -535,12 +642,17 @@ function renderPositioningMap(selectedTrade) {
                         
                         if (xOverlap && yOverlap) {
                             // If they overlap, resolve them.
-                            // 1. Try shifting directions first if both are 'right' or both are 'left'
-                            if (a.dir === b.dir && Math.abs(a.x - b.x) > 25) {
+                            // 1. Try shifting directions first if they have the same direction
+                            if (a.dir === b.dir) {
                                 if (a.x < b.x) {
                                     a.dir = 'left';
-                                } else {
+                                    b.dir = 'right';
+                                } else if (a.x > b.x) {
+                                    a.dir = 'right';
                                     b.dir = 'left';
+                                } else {
+                                    a.dir = 'left';
+                                    b.dir = 'right';
                                 }
                                 collisionsResolved++;
                                 continue;
@@ -548,7 +660,7 @@ function renderPositioningMap(selectedTrade) {
                             
                             // 2. Otherwise push them vertically apart
                             const overlapY = Math.min(aY2, bY2) - Math.max(aY1, bY1);
-                            const shift = Math.max(overlapY + 2, 8);
+                            const shift = Math.max(overlapY + 2, 7);
                             
                             // Move selected one less, or push apart based on original y
                             if (a.y <= b.y) {
@@ -558,6 +670,10 @@ function renderPositioningMap(selectedTrade) {
                                 a.drawY += shift / 2;
                                 b.drawY -= shift / 2;
                             }
+                            
+                            // Keep drawY within canvas chartArea vertical bounds during resolution
+                            a.drawY = Math.max(top + 8, Math.min(bottom - 8, a.drawY));
+                            b.drawY = Math.max(top + 8, Math.min(bottom - 8, b.drawY));
                             collisionsResolved++;
                         }
                     }
@@ -569,10 +685,10 @@ function renderPositioningMap(selectedTrade) {
             labelsToDraw.forEach(item => {
                 if (item.isSelected) {
                     ctx.fillStyle = '#1d4ed8'; // Dark blue for selected/analyzed company
-                    ctx.font = 'bold 12px "Outfit", "Noto Sans KR", sans-serif';
+                    ctx.font = 'bold 11.5px "Outfit", "Noto Sans KR", sans-serif';
                 } else {
                     ctx.fillStyle = isDarkTheme ? '#d1d5db' : '#374151';
-                    ctx.font = '500 11px "Outfit", "Noto Sans KR", sans-serif';
+                    ctx.font = '500 10px "Outfit", "Noto Sans KR", sans-serif';
                 }
                 
                 let textX = item.dir === 'left' 
@@ -580,10 +696,11 @@ function renderPositioningMap(selectedTrade) {
                     : item.x + item.padding;
                 
                 // Prevent text truncation on boundaries
+                if (textX < left + 5) {
+                    textX = left + 5;
+                }
                 if (textX + item.width > right - 5) {
-                    textX = item.x - item.padding - item.width;
-                } else if (textX < left + 5) {
-                    textX = item.x + item.padding;
+                    textX = right - 5 - item.width;
                 }
                 
                 ctx.fillText(item.label, textX, item.drawY);
@@ -635,10 +752,10 @@ function renderPositioningMap(selectedTrade) {
             maintainAspectRatio: false,
             layout: {
                 padding: {
-                    left: 15,
-                    right: 65, // Increased right padding to prevent vendor text truncation
+                    left: 65,
+                    right: 65, // Increased padding to prevent vendor text truncation on both sides
                     top: 15,
-                    bottom: 12
+                    bottom: 15
                 }
             },
             plugins: {
@@ -660,8 +777,8 @@ function renderPositioningMap(selectedTrade) {
                         color: textColor,
                         font: { size: 11, weight: 600 }
                     },
-                    min: 65,
-                    max: 104 // Extended slightly to avoid edge clipping
+                    min: minX,
+                    max: maxX
                 },
                 y: {
                     title: { display: false },
@@ -670,8 +787,8 @@ function renderPositioningMap(selectedTrade) {
                         color: textColor,
                         font: { size: 11, weight: 600 }
                     },
-                    min: 65,
-                    max: 104 // Extended slightly to avoid edge clipping
+                    min: minY,
+                    max: maxY
                 }
             }
         },
@@ -1047,8 +1164,41 @@ function updateDetailedView() {
     // 5. Render Radar Chart
     renderRadarChartSingle(comp1.name, comp1Scores, tradeAverages);
 
-    // 6. Update Positioning Map to highlight selection
+    // 6. Update Positioning Map to highlight selection and zoom dynamically
     if (positioningChart) {
+        const data = positioningChart.data.datasets[0].data;
+        data.sort((a, b) => {
+            if (a.id === comp1Id) return 1;
+            if (b.id === comp1Id) return -1;
+            return 0;
+        });
+
+        // Compute optimal view limits based on newly selected company
+        const prevSystem = Math.round((comp1Scores.management + comp1Scores.system + comp1Scores.risk) / 3);
+        const perf = comp1Scores.performance;
+        
+        let minX = 0, maxX = 104;
+        let minY = 0, maxY = 104;
+        if (prevSystem >= 80 && perf >= 80) {
+            minX = 60; maxX = 104;
+            minY = 60; maxY = 104;
+        } else if (prevSystem < 80 && perf >= 80) {
+            minX = 40; maxX = 90;
+            minY = 60; maxY = 104;
+        } else if (prevSystem < 80 && perf < 80) {
+            minX = 40; maxX = 90;
+            minY = 0; maxY = 90;
+        } else {
+            minX = 60; maxX = 104;
+            minY = 0; maxY = 90;
+        }
+
+        // Apply new limits to scales
+        positioningChart.options.scales.x.min = minX;
+        positioningChart.options.scales.x.max = maxX;
+        positioningChart.options.scales.y.min = minY;
+        positioningChart.options.scales.y.max = maxY;
+
         positioningChart.update();
     }
 
@@ -1123,5 +1273,337 @@ function setupTabs() {
                 }, 50);
             }
         });
+    });
+}
+
+// Setup Upload Modal, PDF Parsing, and JSON Export
+function setupUploadModal() {
+    const btnOpen = document.getElementById("btn-open-upload");
+    const btnClose = document.getElementById("btn-close-modal");
+    const overlay = document.getElementById("upload-modal-overlay");
+    const dropzone = document.getElementById("pdf-dropzone");
+    const fileInput = document.getElementById("pdf-file-input");
+    const loading = document.getElementById("upload-loading");
+    const form = document.getElementById("new-company-form");
+    const btnCancel = document.getElementById("btn-cancel-form");
+    const customTradeInput = document.getElementById("form-trade-custom");
+    const tradeSelect = document.getElementById("form-trade");
+    const downloadJsonBtn = document.getElementById("btn-download-json");
+
+    // Open/Close
+    btnOpen.addEventListener("click", () => {
+        overlay.style.display = "flex";
+        resetDropzone();
+    });
+
+    const closeModal = () => {
+        overlay.style.display = "none";
+    };
+
+    btnClose.addEventListener("click", closeModal);
+    btnCancel.addEventListener("click", closeModal);
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) closeModal();
+    });
+
+    // Custom Trade Input toggle
+    tradeSelect.addEventListener("change", (e) => {
+        if (e.target.value === "기타") {
+            customTradeInput.style.display = "block";
+            customTradeInput.required = true;
+        } else {
+            customTradeInput.style.display = "none";
+            customTradeInput.required = false;
+        }
+    });
+
+    // Drag and Drop
+    dropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropzone.classList.add("dragover");
+    });
+
+    dropzone.addEventListener("dragleave", () => {
+        dropzone.classList.remove("dragover");
+    });
+
+    dropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("dragover");
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handlePDFFile(files[0]);
+        }
+    });
+
+    dropzone.addEventListener("click", (e) => {
+        if (e.target.tagName !== "INPUT") {
+            fileInput.click();
+        }
+    });
+
+    fileInput.addEventListener("change", (e) => {
+        if (e.target.files.length > 0) {
+            handlePDFFile(e.target.files[0]);
+        }
+    });
+
+    function resetDropzone() {
+        fileInput.value = "";
+        dropzone.style.display = "flex";
+        loading.style.display = "none";
+        form.style.display = "none";
+        form.reset();
+        customTradeInput.style.display = "none";
+        document.getElementById("parsing-badge-notice").style.display = "none";
+    }
+
+    // Handle and read PDF
+    function handlePDFFile(file) {
+        if (file.type !== "application/pdf" && !file.name.endsWith(".pdf")) {
+            alert("PDF 파일만 업로드할 수 있습니다.");
+            return;
+        }
+
+        // Show loading state
+        dropzone.classList.add("loading");
+        loading.style.display = "flex";
+        form.style.display = "none";
+
+        const fileReader = new FileReader();
+        fileReader.onload = function() {
+            const typedarray = new Uint8Array(this.result);
+            
+            // Set pdfjs worker source
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            
+            pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                let maxPages = pdf.numPages;
+                let countPromises = [];
+                for (let j = 1; j <= maxPages; j++) {
+                    countPromises.push(pdf.getPage(j).then(page => {
+                        return page.getTextContent().then(textContent => {
+                            return textContent.items.map(item => item.str).join(" ");
+                        });
+                    }));
+                }
+                return Promise.all(countPromises).then(texts => {
+                    const fullText = texts.join("\n");
+                    parsePDFText(fullText, file.name);
+                });
+            }).catch(err => {
+                alert("PDF 파싱 오류: " + err.message);
+                resetDropzone();
+            });
+        };
+        fileReader.readAsArrayBuffer(file);
+    }
+
+    // Parse extracted text
+    function parsePDFText(text, filename) {
+        // 1. Identify source type
+        const isNice = text.includes("나이스디앤비") || text.includes("NICE") || (text.includes("SA") && !text.includes("이크레더블"));
+        const sourceType = isNice ? "나이스디앤비" : "이크레더블";
+
+        // 2. Extract Company Name (e.g. (주)대한건설.pdf -> (주)대한건설)
+        let companyName = filename.replace(/\.pdf$/i, "").trim();
+
+        // 3. Score & Grade extraction
+        let totalScore = 0.0;
+        let sourceGrade = "SH3";
+        let expiryDate = "2027-12-31";
+
+        if (sourceType === "이크레더블") {
+            // SH Score extraction
+            const scoreMatch = text.match(/SH\s+Score\s*(\d+(?:\.\d+)?)/i) || text.match(/Score\s*(\d+(?:\.\d+)?)/i);
+            if (scoreMatch) {
+                totalScore = parseFloat(scoreMatch[1]);
+            } else {
+                // search for decimal score
+                const decMatch = text.match(/(\d{2}\.\d{1})/);
+                if (decMatch) totalScore = parseFloat(decMatch[1]);
+            }
+
+            // Grade extraction
+            const gradeMatch = text.match(/SH\s*(\d)/i) || text.match(/SH-(\d)/i);
+            if (gradeMatch) {
+                sourceGrade = "SH" + gradeMatch[1];
+            } else {
+                if (totalScore >= 95) sourceGrade = "SH1";
+                else if (totalScore >= 85) sourceGrade = "SH2";
+                else if (totalScore >= 75) sourceGrade = "SH3";
+                else if (totalScore >= 65) sourceGrade = "SH4";
+                else sourceGrade = "SH5";
+            }
+
+            const expiryMatch = text.match(/유효기간\s*(\d{4}\.\d{2}\.\d{2})\s*~\s*(\d{4}\.\d{2}\.\d{2})/);
+            if (expiryMatch) {
+                expiryDate = expiryMatch[2].replace(/\./g, "-");
+            }
+        } else {
+            // 나이스디앤비
+            const scoreMatch = text.match(/SA\d+등급\((\d+)점\)/) || text.match(/(\d{3,4})\s*\/\s*1000/) || text.match(/(\d{3,4})\s*점/);
+            if (scoreMatch) {
+                totalScore = parseFloat(scoreMatch[1]);
+            } else {
+                totalScore = 800.0;
+            }
+
+            const gradeMatch = text.match(/SA\s*(\d)/i) || text.match(/SA-(\d)/i) || text.match(/SA(\d)등급/);
+            if (gradeMatch) {
+                sourceGrade = "SA" + gradeMatch[1];
+            } else {
+                if (totalScore >= 950) sourceGrade = "SA1";
+                else if (totalScore >= 850) sourceGrade = "SA2";
+                else if (totalScore >= 750) sourceGrade = "SA3";
+                else if (totalScore >= 650) sourceGrade = "SA4";
+                else sourceGrade = "SA5";
+            }
+
+            const expiryMatch = text.match(/유효기간\s*:\s*(\d{4}\.\d{2}\.\d{2})\s*~\s*(\d{4}\.\d{2}\.\d{2})/) || text.match(/(\d{4}\.\d{2}\.\d{2})\s*~\s*(\d{4}\.\d{2}\.\d{2})/);
+            if (expiryMatch) {
+                expiryDate = expiryMatch[2].replace(/\./g, "-");
+            }
+        }
+
+        const titleMatch = text.match(/(?:회사명|업체명|상호)\s*:\s*([가-힣a-zA-Z0-9()]+)/);
+        if (titleMatch && titleMatch[1]) {
+            companyName = titleMatch[1].trim();
+        }
+
+        // Show form & Populate parsed data
+        dropzone.style.display = "none";
+        form.style.display = "block";
+        document.getElementById("parsing-badge-notice").style.display = "flex";
+
+        document.getElementById("form-name").value = companyName;
+        document.getElementById("form-source-type").value = sourceType;
+        document.getElementById("form-source-grade").value = sourceGrade;
+        document.getElementById("form-safety-score").value = totalScore;
+        document.getElementById("form-expiry-date").value = expiryDate;
+
+        document.getElementById("form-credit-grade").value = "BB";
+        document.getElementById("form-credit-score").value = 60;
+
+        const rawScoresContainer = document.getElementById("raw-scores-inputs-container");
+        rawScoresContainer.innerHTML = "";
+
+        if (sourceType === "이크레더블") {
+            const scoresFound = [...text.matchAll(/(\d+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)/g)];
+            let mVal = 30.0, oVal = 30.0, iVal = 8.0, pVal = 12.0;
+            if (scoresFound.length >= 4) {
+                mVal = parseFloat(scoresFound[0][1]);
+                oVal = parseFloat(scoresFound[1][1]);
+                iVal = parseFloat(scoresFound[2][1]);
+                pVal = parseFloat(scoresFound[3][1]);
+            } else {
+                const ratio = totalScore / 100;
+                mVal = Math.round(ratio * 35 * 10) / 10;
+                oVal = Math.round(ratio * 40 * 10) / 10;
+                iVal = Math.round(ratio * 10 * 10) / 10;
+                pVal = Math.round(ratio * 15 * 10) / 10;
+            }
+            rawScoresContainer.innerHTML = `
+                <input type="hidden" name="raw_management" value="${mVal}">
+                <input type="hidden" name="raw_operation" value="${oVal}">
+                <input type="hidden" name="raw_investment" value="${iVal}">
+                <input type="hidden" name="raw_performance" value="${pVal}">
+            `;
+        } else {
+            const ratio = totalScore / 1000;
+            const control = Math.round(ratio * 150);
+            const hazards = Math.round(ratio * 150);
+            const investment = Math.round(ratio * 150);
+            const feedback = Math.round(ratio * 100);
+            const prevention = Math.round(ratio * 300);
+            const education = Math.round(ratio * 150);
+
+            rawScoresContainer.innerHTML = `
+                <input type="hidden" name="raw_control" value="${control}">
+                <input type="hidden" name="raw_hazards" value="${hazards}">
+                <input type="hidden" name="raw_investment" value="${investment}">
+                <input type="hidden" name="raw_feedback" value="${feedback}">
+                <input type="hidden" name="raw_prevention" value="${prevention}">
+                <input type="hidden" name="raw_education" value="${education}">
+            `;
+        }
+    }
+
+    // Submit handler
+    form.addEventListener("submit", (e) => {
+        e.preventDefault();
+
+        const name = document.getElementById("form-name").value.trim();
+        let trade = document.getElementById("form-trade").value;
+        if (trade === "기타") {
+            trade = customTradeInput.value.trim();
+        }
+        const sourceType = document.getElementById("form-source-type").value;
+        const sourceGrade = document.getElementById("form-source-grade").value.trim();
+        const rawSafetyScore = parseFloat(document.getElementById("form-safety-score").value);
+        const expiryDate = document.getElementById("form-expiry-date").value;
+        const creditGrade = document.getElementById("form-credit-grade").value.trim();
+        const creditScore = parseInt(document.getElementById("form-credit-score").value, 10);
+
+        const id = name.replace(/[^a-zA-Z0-9가-힣]/g, "").toLowerCase() + "_" + Math.floor(Math.random() * 1000);
+
+        const rawScores = {};
+        if (sourceType === "이크레더블") {
+            rawScores.management = parseFloat(form.querySelector("[name='raw_management']").value);
+            rawScores.operation = parseFloat(form.querySelector("[name='raw_operation']").value);
+            rawScores.investment = parseFloat(form.querySelector("[name='raw_investment']").value);
+            rawScores.performance = parseFloat(form.querySelector("[name='raw_performance']").value);
+        } else {
+            rawScores.control = parseInt(form.querySelector("[name='raw_control']").value, 10);
+            rawScores.hazards = parseInt(form.querySelector("[name='raw_hazards']").value, 10);
+            rawScores.investment = parseInt(form.querySelector("[name='raw_investment']").value, 10);
+            rawScores.feedback = parseInt(form.querySelector("[name='raw_feedback']").value, 10);
+            rawScores.prevention = parseInt(form.querySelector("[name='raw_prevention']").value, 10);
+            rawScores.education = parseInt(form.querySelector("[name='raw_education']").value, 10);
+        }
+
+        const newCompany = {
+            id,
+            name,
+            trade,
+            creditGrade,
+            creditScore,
+            sourceType,
+            sourceGrade,
+            rawSafetyScore,
+            rawScores,
+            expiryDate,
+            status: "정상"
+        };
+
+        localCompanies.unshift(newCompany);
+        localStorage.setItem("local_companies", JSON.stringify(localCompanies));
+        companiesData.unshift(newCompany);
+
+        updateOverviewStats();
+        populateTradeSelect();
+        
+        populateCompanySelect("all", "");
+        const select1 = document.getElementById("company-select-1");
+        select1.value = id;
+
+        renderTradeGradeChart();
+        renderPositioningMap("all");
+        updateDetailedView();
+
+        closeModal();
+        alert(`성공적으로 등록되었습니다: ${name}`);
+    });
+
+    // JSON Export
+    downloadJsonBtn.addEventListener("click", () => {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(companiesData, null, 4));
+        const downloadAnchor = document.createElement('a');
+        downloadAnchor.setAttribute("href", dataStr);
+        downloadAnchor.setAttribute("download", "data.json");
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+        alert("업데이트된 data.json 파일을 다운로드했습니다. 이 파일을 프로젝트 루트 디렉토리에 덮어쓰면 서버 및 타 장치에서도 유지됩니다.");
     });
 }

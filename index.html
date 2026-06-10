@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="light-theme">
@@ -98,6 +99,16 @@
                                     <!-- Populated by JS -->
                                 </select>
                             </div>
+
+                            <!-- PDF Upload & Export Actions -->
+                            <div class="selection-group actions-row" style="display: flex; gap: 8px; margin-top: 12px;">
+                                <button id="btn-open-upload" class="select-dropdown" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border-radius: 8px; border: none; background: var(--primary); color: #ffffff; font-weight: 700; cursor: pointer;">
+                                    <i class="fa-solid fa-file-pdf"></i> 신규 업체 등록
+                                </button>
+                                <button id="btn-download-json" class="select-dropdown" title="데이터 JSON으로 내보내기" style="width: 42px; padding: 10px 0; display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer;">
+                                    <i class="fa-solid fa-file-export"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -171,13 +182,14 @@
                             <h2><i class="fa-solid fa-diagram-project"></i> 포지셔닝 맵 (4분면)</h2>
                         </div>
                         <div class="panel-body chart-positioning-container-compact">
-                            <div class="quadrant-labels">
-                                <span class="q-label q-top-left">성과 우수 / 체계 보완</span>
-                                <span class="q-label q-top-right">안전 최우수 파트너</span>
-                                <span class="q-label q-bottom-left">안전 집중 관리 대상</span>
-                                <span class="q-label q-bottom-right">체계 우수 / 성과 보완</span>
-                            </div>
                             <canvas id="positioningMapChart"></canvas>
+                        </div>
+                        <!-- Beautiful, clear legend outside the graph -->
+                        <div class="quadrant-outside-legend" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; padding: 10px 4px; border-top: 1px dashed var(--card-border);">
+                            <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--success);"><span style="width: 12px; height: 12px; background: var(--success); border-radius: 3px; display: inline-block;"></span> 안전 최우수 파트너 (1사분면)</div>
+                            <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--warning);"><span style="width: 12px; height: 12px; background: var(--warning); border-radius: 3px; display: inline-block;"></span> 성과 우수 / 체계 보완 (2사분면)</div>
+                            <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--danger);"><span style="width: 12px; height: 12px; background: var(--danger); border-radius: 3px; display: inline-block;"></span> 안전 집중 관리 대상 (3사분면)</div>
+                            <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--primary);"><span style="width: 12px; height: 12px; background: var(--primary); border-radius: 3px; display: inline-block;"></span> 체계 우수 / 성과 보완 (4사분면)</div>
                         </div>
                     </div>
                 </div>
@@ -316,6 +328,92 @@
             </div>
         </div>
     </div>
+
+    <!-- PDF Upload Modal & Overlay -->
+    <div id="upload-modal-overlay" class="modal-overlay" style="display: none;">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-file-pdf"></i> 새로운 협력업체 등록 (안전평가 PDF 분석)</h2>
+                <button id="btn-close-modal" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Drop Zone -->
+                <div id="pdf-dropzone" class="dropzone-area">
+                    <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+                    <p class="drop-text">여기에 PDF 파일을 드래그 앤 드롭하거나 <span>파일 탐색기 열기</span></p>
+                    <input type="file" id="pdf-file-input" accept=".pdf" style="display: none;">
+                    <div id="upload-loading" class="upload-loader-wrap" style="display: none;">
+                        <span class="loader-spinner"></span>
+                        <p>PDF 문서를 분석하여 데이터 항목을 추출하는 중입니다...</p>
+                    </div>
+                </div>
+
+                <!-- Form for verification/input -->
+                <form id="new-company-form" class="company-input-form" style="display: none;">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="form-name">업체명 <span class="required">*</span></label>
+                            <input type="text" id="form-name" required placeholder="예: (주)대한건설">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-trade">등록 공종 <span class="required">*</span></label>
+                            <select id="form-trade" required>
+                                <option value="철근콘크리트(건축)">철근콘크리트(건축)</option>
+                                <option value="토공">토공</option>
+                                <option value="기계설비">기계설비</option>
+                                <option value="전기공사">전기공사</option>
+                                <option value="기타">직접 입력 (기타)</option>
+                            </select>
+                            <input type="text" id="form-trade-custom" placeholder="공종명 직접 입력" style="display: none; margin-top: 6px;">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-source-type">안전 평가사 <span class="required">*</span></label>
+                            <select id="form-source-type" required>
+                                <option value="이크레더블">이크레더블</option>
+                                <option value="나이스디앤비">나이스디앤비</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="form-source-grade">안전 평가 등급 <span class="required">*</span></label>
+                            <input type="text" id="form-source-grade" required placeholder="예: SH2 또는 SA1">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-safety-score">안전 평가 점수 <span class="required">*</span></label>
+                            <input type="number" step="0.1" id="form-safety-score" required placeholder="예: 93.5 (이크레더블) 또는 950 (나이스디앤비)">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-expiry-date">평가 만료일 <span class="required">*</span></label>
+                            <input type="date" id="form-expiry-date" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="form-credit-grade">신용 평가 등급 <span class="required">*</span></label>
+                            <input type="text" id="form-credit-grade" required placeholder="예: BB+">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-credit-score">신용 평가 점수 <span class="required">*</span></label>
+                            <input type="number" id="form-credit-score" required placeholder="예: 68">
+                        </div>
+                    </div>
+
+                    <!-- Hidden raw scores values parsed from PDF or given fallbacks -->
+                    <div id="raw-scores-inputs-container" style="display: none;">
+                        <!-- inputs are generated/populated via JS -->
+                    </div>
+
+                    <div id="parsing-badge-notice" class="parsed-success-badge" style="display: none;">
+                        <i class="fa-solid fa-circle-check"></i> PDF에서 기본 정보를 성공적으로 추출하였습니다. 나머지 정보를 확인 후 완료해주세요.
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" id="btn-cancel-form" class="btn-form-secondary">취소</button>
+                        <button type="submit" id="btn-submit-form" class="btn-form-primary">등록 완료</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="data.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
