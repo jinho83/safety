@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>협력사 안전수준 통합 분석 대시보드</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="light-theme">
+    <div class="app-container">
+        <!-- Tabs & Compact Stats Navigation Row (Now main navigation) -->
+        <div class="nav-stats-row glass-card">
+            <div class="logo-area" style="padding-right: 15px; border-right: 1px solid var(--card-border);">
+                <i class="fa-solid fa-shield-halved logo-icon" style="font-size: 20px;"></i>
+                <div class="logo-text">
+                    <h1 style="font-size: 14.5px; font-weight: 850; letter-spacing: 0.2px; color: var(--text-primary);">협력사 안전수준 통합 대시보드</h1>
+                </div>
+            </div>
+
+            <div class="tabs-nav">
+                <button class="tab-btn active" data-tab="dashboard-tab">
+                    <i class="fa-solid fa-chart-line"></i> 통합 분석 대시보드
+                </button>
+                <button class="tab-btn" data-tab="formula-tab">
+                    <i class="fa-solid fa-calculator"></i> 통합 등급 산출 기준
+                </button>
+            </div>
+            
+            <div class="compact-stats-bar" style="margin-left: auto;">
+                <div class="meta-tag" style="background: var(--primary-glow); border: 1px solid rgba(59, 130, 246, 0.2); padding: 4px 10px; border-radius: 30px; font-size: 11px; font-weight: 500; color: var(--primary); display: flex; align-items: center; gap: 6px; margin-right: 10px;">
+                    <span class="pulse-dot"></span>
+                    <span>SH (이크레더블) & SA (나이스디앤비) 통합 연동 중</span>
+                </div>
+                <div class="stat-pill">
+                    <span class="lbl">협력사</span>
+                    <strong class="val" id="total-companies-val">0</strong>
+                </div>
+                <div class="stat-pill text-success">
+                    <span class="lbl">우수 (1~2등급)</span>
+                    <strong class="val" id="excellent-companies-val">0</strong>
+                </div>
+                <div class="stat-pill text-warning">
+                    <span class="lbl">만료 임박 (30일)</span>
+                    <strong class="val" id="expiring-companies-val">0</strong>
+                </div>
+                <div class="stat-pill text-danger">
+                    <span class="lbl">만료 / 미제출</span>
+                    <strong class="val" id="expired-companies-val">0</strong>
+                </div>
+                <button id="theme-toggle" class="btn-icon" title="테마 변경" style="width: 32px; height: 32px; margin-left: 5px;">
+                    <i class="fa-solid fa-moon" style="font-size: 12px;"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab Contents -->
+        <div class="tab-content active" id="dashboard-tab">
+            <!-- Main Dashboard Grid (3-column layout to fit on screen) -->
+            <main class="dashboard-grid">
+                
+                <!-- Column 1: Subcontractor Selector & Search (Left) -->
+                <div class="grid-column-left">
+                    <div class="dashboard-panel glass-card selection-panel">
+                        <div class="panel-header">
+                            <h2><i class="fa-solid fa-magnifying-glass"></i> 협력사 선택 및 검색</h2>
+                        </div>
+                        <div class="panel-body selection-body">
+                            <!-- Trade Filter -->
+                            <div class="selection-group">
+                                <label for="trade-filter" class="group-label">공종 필터</label>
+                                <select id="trade-filter" class="select-dropdown full-width">
+                                    <option value="all">전체 공종</option>
+                                    <!-- Populated by JS -->
+                                </select>
+                            </div>
+
+                            <!-- Search Input -->
+                            <div class="selection-group">
+                                <label for="company-search" class="group-label">업체명 검색</label>
+                                <div class="search-input-wrapper">
+                                    <i class="fa-solid fa-search search-icon"></i>
+                                    <input type="text" id="company-search" class="search-input" placeholder="업체명 검색...">
+                                </div>
+                            </div>
+
+                            <!-- Subcontractor Select -->
+                            <div class="selection-group">
+                                <label for="company-select-1" class="group-label">협력업체 선택</label>
+                                <select id="company-select-1" class="select-dropdown full-width" size="10" style="height: 220px; overflow-y: auto;">
+                                    <!-- Populated by JS -->
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Column 2: Selected Company Diagnosis (Center - Main View) -->
+                <div class="grid-column-center">
+                    <!-- Micro View: Selected Company Detail -->
+                    <div class="dashboard-panel glass-card detail-panel">
+                        <div class="panel-header">
+                            <h2><i class="fa-solid fa-shield-halved"></i> 협력사 안전 정밀 진단</h2>
+                        </div>
+                        
+                        <div class="panel-body detail-layout">
+                            <!-- 1. Full-width Percentile Banner at the top -->
+                            <div id="detail-percentile-statement" class="percentile-text"></div>
+
+                            <!-- 2. Two-column Grid for the main content -->
+                            <div class="diagnosis-main-grid">
+                                <!-- Left Column -->
+                                <div class="diagnosis-column-left">
+                                    <!-- Basic Info Card -->
+                                    <div class="detail-basic-info" id="detail-basic-info-card">
+                                        <!-- Populated dynamically by JS -->
+                                    </div>
+                                    <!-- Radar Chart Card -->
+                                    <div class="detail-radar-section">
+                                        <div class="radar-chart-header">안전관리 영역별 비교 그래프 (vs 공종 평균)</div>
+                                        <div class="radar-chart-container">
+                                            <canvas id="radarCompareChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Right Column -->
+                                <div class="diagnosis-column-right">
+                                    <!-- Comparison Table Card -->
+                                    <div class="table-section">
+                                        <div class="table-wrapper">
+                                            <table class="evaluation-table" id="details-comparison-table">
+                                                <!-- Populated dynamically by JS -->
+                                            </table>
+                                        </div>
+                                    </div>
+                                    <!-- Insights Card -->
+                                    <div class="insights-section">
+                                        <div id="detail-insights-container" class="insights-container">
+                                            <!-- Populated dynamically by JS -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Column 3: Macro Analytics (Right) -->
+                <div class="grid-column-right">
+                    <!-- Combined Trade Analytics (Grade Distribution Chart) -->
+                    <div class="dashboard-panel glass-card chart-panel-compact" style="flex: 1.2;">
+                        <div class="panel-header">
+                            <h2 id="trade-combined-title"><i class="fa-solid fa-chart-bar"></i> 선택 공종 등급 분포</h2>
+                        </div>
+                        <div class="panel-body chart-container-compact">
+                            <canvas id="tradeCombinedChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Positioning Map -->
+                    <div class="dashboard-panel glass-card chart-panel-compact positioning-panel">
+                        <div class="panel-header-actions">
+                            <h2><i class="fa-solid fa-diagram-project"></i> 포지셔닝 맵 (4분면)</h2>
+                        </div>
+                        <div class="panel-body chart-positioning-container-compact">
+                            <div class="quadrant-labels">
+                                <span class="q-label q-top-left">성과 우수 / 체계 보완</span>
+                                <span class="q-label q-top-right">안전 최우수 파트너</span>
+                                <span class="q-label q-bottom-left">안전 집중 관리 대상</span>
+                                <span class="q-label q-bottom-right">체계 우수 / 성과 보완</span>
+                            </div>
+                            <canvas id="positioningMapChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+            </main>
+        </div>
+
+        <!-- Tab 2: Formula Tab -->
+        <div class="tab-content" id="formula-tab" style="display: none;">
+            <div class="formula-container">
+                <!-- Card 1: Score Normalization & Grades -->
+                <div class="dashboard-panel glass-card formula-card">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-scale-balanced"></i> 1. 종합 점수 표준화 및 등급 매핑 기준</h2>
+                    </div>
+                    <div class="panel-body formula-body">
+                        <div class="formula-columns">
+                            <div class="formula-box">
+                                <h3>평가사별 종합 점수 표준화</h3>
+                                <div class="formula-expr">
+                                    <span class="badge company-badge-credible">이크레더블 (SH)</span>
+                                    <div class="math-expr">
+                                        통합 점수 = <strong class="highlight">원본 안전 점수</strong>
+                                        <small class="text-muted">(100점 만점 기준 그대로 반영)</small>
+                                    </div>
+                                </div>
+                                <div class="formula-expr">
+                                    <span class="badge company-badge-nice">나이스디앤비 (SA)</span>
+                                    <div class="math-expr">
+                                        통합 점수 = <strong class="highlight">원본 안전 점수 ÷ 10</strong>
+                                        <small class="text-muted">(1000점 만점 기준을 100점 만점으로 스케일 다운)</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="formula-box">
+                                <h3>통합 안전등급 매핑 테이블</h3>
+                                <ul class="grade-list">
+                                    <li><span class="badge g-badge g1">1등급</span> <span class="range">95점 이상</span></li>
+                                    <li><span class="badge g-badge g2">2등급</span> <span class="range">85점 이상 ~ 95점 미만</span></li>
+                                    <li><span class="badge g-badge g3">3등급</span> <span class="range">75점 이상 ~ 85점 미만</span></li>
+                                    <li><span class="badge g-badge g4">4등급</span> <span class="range">65점 이상 ~ 75점 미만</span></li>
+                                    <li><span class="badge g-badge g5">5등급</span> <span class="range">55점 이상 ~ 65점 미만</span></li>
+                                    <li><span class="badge g-badge g6">6등급</span> <span class="range">45점 이상 ~ 55점 미만</span></li>
+                                    <li><span class="badge g-badge g7">7등급</span> <span class="range">45점 미만</span></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 2: Category Mapping Table -->
+                <div class="dashboard-panel glass-card formula-card">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-list-check"></i> 2. 세부 평가 항목 통합 매핑 및 환산 공식 (100점 만점 기준)</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="table-wrapper">
+                            <table class="evaluation-table formula-table">
+                                <thead>
+                                    <tr>
+                                        <th>통합 안전 항목</th>
+                                        <th>이크레더블 (SH) 원본 대비 매핑 공식</th>
+                                        <th>나이스디앤비 (SA) 원본 대비 매핑 공식</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><strong>경영방침 및 조직</strong></td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">(경영체계 점수 ÷ 35) × 100</span>
+                                                <small class="text-muted">(배점: 35점)</small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">(관리체계 점수 ÷ 150) × 100</span>
+                                                <small class="text-muted">(배점: 150점)</small>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>안전관리 체계 및 교육</strong></td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">(운영관리 점수 ÷ 40) × 100</span>
+                                                <small class="text-muted">(배점: 40점)</small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">((의견청취 + 안전교육 점수) ÷ 250) × 100</span>
+                                                <small class="text-muted">(배점: 의견청취 100점 / 안전교육 150점)</small>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>위험성 평가 및 투자</strong></td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">(투자 점수 ÷ 10) × 100</span>
+                                                <small class="text-muted">(배점: 10점)</small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">((유해위험요인 + 예산투자 점수) ÷ 300) × 100</span>
+                                                <small class="text-muted">(배점: 유해위험요인 150점 / 예산투자 150점)</small>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>안전 성과 (재해율)</strong></td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">(성과 점수 ÷ 15) × 100</span>
+                                                <small class="text-muted">(배점: 15점)</small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="formula-cell">
+                                                <span class="math-code">(재해예방 점수 ÷ 300) × 100</span>
+                                                <small class="text-muted">(배점: 300점)</small>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="formula-notice">
+                            <i class="fa-solid fa-circle-info"></i>
+                            <strong>안내 사항:</strong> 환산 공식에 따른 세부 점수 매핑 결과는 소수점 첫째 자리에서 반올림 처리되며, 평가 기관 간의 배점 비중에 근거하여 동등한 수준으로 정규화(Normalization)하여 비교 분석에 활용됩니다.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
