@@ -152,6 +152,8 @@
                                             </table>
                                         </div>
                                     </div>
+                                    <!-- 특이사항 (Accident Alert) - Rendered Separately -->
+                                    <div id="detail-accident-alert" style="flex-shrink: 0;"></div>
                                     <!-- Insights Card -->
                                     <div class="insights-section">
                                         <div id="detail-insights-container" class="insights-container">
@@ -185,7 +187,7 @@
                             <canvas id="positioningMapChart"></canvas>
                         </div>
                         <!-- Beautiful, clear legend outside the graph -->
-                        <div class="quadrant-outside-legend" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; padding: 10px 4px; border-top: 1px dashed var(--card-border);">
+                        <div class="quadrant-outside-legend" style="display: grid; grid-template-columns: repeat(2, max-content); justify-content: center; gap: 6px 24px; margin-top: 10px; padding: 10px 4px; border-top: 1px dashed var(--card-border);">
                             <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--warning);"><span style="width: 12px; height: 12px; background: var(--warning); border-radius: 3px; display: inline-block;"></span> 성과 우수 / 체계 보완 (2사분면)</div>
                             <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--success);"><span style="width: 12px; height: 12px; background: var(--success); border-radius: 3px; display: inline-block;"></span> 안전 최우수 파트너 (1사분면)</div>
                             <div class="legend-item" style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--danger);"><span style="width: 12px; height: 12px; background: var(--danger); border-radius: 3px; display: inline-block;"></span> 안전 집중 관리 대상 (3사분면)</div>
@@ -331,7 +333,7 @@
 
     <!-- PDF Upload Modal & Overlay Removed -->
 
-    <script src="data.js"></script>
-    <script src="app.js"></script>
+    <script src="data.js?v=1.0.7"></script>
+    <script src="app.js?v=1.0.7"></script>
 </body>
 </html>

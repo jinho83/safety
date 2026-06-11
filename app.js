@@ -771,7 +771,12 @@ function renderPositioningMap(selectedTrade) {
             },
             scales: {
                 x: {
-                    title: { display: false },
+                    title: {
+                        display: true,
+                        text: '예방체계 점수',
+                        color: textColor,
+                        font: { size: 11, weight: 600 }
+                    },
                     grid: { color: gridColor },
                     ticks: { 
                         color: textColor,
@@ -781,7 +786,12 @@ function renderPositioningMap(selectedTrade) {
                     max: maxX
                 },
                 y: {
-                    title: { display: false },
+                    title: {
+                        display: true,
+                        text: '실행성과 점수',
+                        color: textColor,
+                        font: { size: 11, weight: 600 }
+                    },
                     grid: { color: gridColor },
                     ticks: { 
                         color: textColor,
@@ -967,6 +977,552 @@ function getTradeAverages(trade) {
     return averages;
 }
 
+// Summarize raw evaluation agency opinions into cooperative subcontractor insights
+function summarizeOpinionForSubcontractor(opinionText) {
+    if (!opinionText) return "";
+
+    const sentences = opinionText.split(/\.\s+|\n/);
+    const lackingPoints = [];
+    const actionPoints = [];
+
+    const lackingKeywords = ["미흡", "미비", "부재", "한계", "우려", "누락", "다소", "보통", "수립되지", "않은", "미흡한", "부족"];
+    const actionKeywords = ["권고", "제언", "필요", "요구", "강화", "구체화", "보완", "수립할 것", "실행할 것", "작성할 것", "추천", "개선", "관리할 것"];
+
+    // ── 1단계: [중점 개선 권고] 섹션 직접 추출 (가장 신뢰성 높은 소스) ──
+    const improvement섹션Match = opinionText.match(/\[중점\s*개선\s*권고\]([\s\S]*?)(?=\[|$)/);
+    if (improvement섹션Match) {
+        const improvLines = improvement섹션Match[1].split(/\n/)
+            .map(l => l.trim().replace(/^[•\-\*\s\d\.\)]+/, '').trim())
+            .filter(l => l.length > 10);
+        improvLines.forEach(line => {
+            // 점수/퍼센트 제거
+            let l = line
+                .replace(/[\\d\\.]+점으로/g, '')
+                .replace(/[\\d\\.]+점/g, '')
+                .replace(/[\\d\\.]+%/g, '')
+                .replace(/\s{2,}/g, ' ').trim();
+            if (!l || l.length < 10) return;
+            // 긍정 강점 문장은 제외 (강점 항목 아님)
+            if ((l.includes('우수합니다') || l.includes('긍정적입니다')) && !l.includes('필요') && !l.includes('요구') && !l.includes('권고')) return;
+            // 동사→협력사 치환
+            l = l.replace(/동사의/g, '협력사의').replace(/동사는/g, '협력사는').replace(/동사/g, '우리 회사')
+                 .replace(/본 업체는/g, '협력사는').replace(/본 업체/g, '협력사');
+            // 어미 변환
+            l = l.replace(/필요합니다\.?$/, '필요합니다')
+                 .replace(/요구됩니다\.?$/, '요구됩니다')
+                 .replace(/권고합니다\.?$/, '권고합니다')
+                 .replace(/필요합니다\.$/, '필요합니다')
+                 .replace(/요구됩니다\.$/, '요구됩니다');
+            actionPoints.push(l);
+        });
+    }
+
+
+
+    sentences.forEach(s => {
+        let clean = s.trim().replace(/^[•\-\*\s\d\.\)]+/, "").trim();
+        if (clean.length < 10) return;
+        if (clean.includes("종합 평가의견") || clean.includes("세부 진단의견") || clean.includes("기업 개요 및 분석") || clean.includes("종합 진단의견") || clean.includes("주요 강점 항목") || clean.includes("중점 개선 권고")) return;
+        if (clean.startsWith("안전보건 경영체계") || clean.startsWith("안전보건 운영관리") || clean.startsWith("안전보건 투자") || clean.startsWith("안전보건 성과")) return;
+
+        // Skip purely positive or descriptive sentences
+        const isPositiveOrNeutral = (clean.includes("하고 있음") || clean.includes("있으며") || clean.includes("유지하고") || clean.includes("양호") || clean.includes("우수")) &&
+                                    (!clean.includes("미비") && !clean.includes("미흡") && !clean.includes("권고") && !clean.includes("제언") && !clean.includes("부재") && !clean.includes("필요") && !clean.includes("보완") && !clean.includes("단축") && !clean.includes("미흡한"));
+        if (isPositiveOrNeutral) return;
+
+        clean = clean.replace(/동사의/g, '협력사의')
+                     .replace(/동사는/g, '협력사는')
+                     .replace(/동사/g, '우리 회사')
+                     .replace(/본 업체는/g, '협력사는')
+                     .replace(/본 업체/g, '협력사');
+
+        // 포인트/퍼센트 가 포함된 표현 제거 (통합점수와 혼동 방지)
+        clean = clean
+            // 전체 평균 N점으로 양호 / 우수 ~유지하고있으나
+            .replace(/종합\s+안전\s+점검\s+결과\s+전체\s+평균\s+[\d\.]+점으로/g, '안전 점검 결과')
+            // 전체 평균 N점으로 -> 제거
+            .replace(/전체\s+평균\s+[\d\.]+점으로/g, '')
+            // N점으로 추산되는 등 / N점으로 양호 등
+            .replace(/[\d\.]+점으로/g, '')
+            // 산업재해율\('[\d\.]+\.\d+\s*~.*?\)\)?이\s+[\d\.]+%를 기록
+            .replace(/산업재해율[^\)]*\)[\s\S]*?[\d\.]+%를\s+기록[^,\.]*[,\.]/g, '')
+            // 동종업계\s*평균\([\d\.]+%\)\s*대비
+            .replace(/동종업계\s*평균\([\d\.]+%\)\s*대비[^,\.]*[,\.]/g, '')
+            // N%를 기록하는 등
+            .replace(/[\d\.]+%를\s+기록[^,\.]*[,\.]/g, '')
+            // 상위\s*N%\(N위\)에 해당합니다 (모야모야 표시)
+            .replace(/상위\s*[\d]+%\([\d]+위\).*?$/g, '')
+            // 전체 평균 N점 (점수 제거)
+            .replace(/전체\s+평균\s+[\d\.]+점/g, '')
+            // N점에 해당 / N점 수준
+            .replace(/[\d\.]+점\s+수준/g, '해당 수준')
+            .replace(/[\d\.]+점/g, '')
+            // 연속 공백 정리
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+
+        let isLacking = lackingKeywords.some(kw => clean.includes(kw));
+        let isAction = clean.includes("권고") || clean.includes("제언") || clean.includes("필요함") || clean.includes("요구") || clean.includes("강화") || clean.includes("보완");
+
+        if (isLacking || isAction) {
+            let problem = "";
+            let action = "";
+
+            if (clean.includes("하였으나") || clean.includes("있으나")) {
+                const splitWord = clean.includes("하였으나") ? "하였으나" : "있으나";
+                const parts = clean.split(splitWord);
+                const before = parts[0].trim();
+                const after = parts[1].trim();
+
+                if (after.includes("한 바,") || after.includes("하는 바,")) {
+                    const afterSplitWord = after.includes("한 바,") ? "한 바," : "하는 바,";
+                    const subParts = after.split(afterSplitWord);
+                    problem = `${before}${splitWord} ${subParts[0].trim()}`;
+                    action = subParts[1].trim();
+                } else {
+                    problem = `${before}${splitWord} 일부 개선 필요 요소가 확인됨`;
+                    action = after;
+                }
+            } else if (clean.includes("않은 바,")) {
+                const parts = clean.split("않은 바,");
+                const before = parts[0].trim();
+                if (before.endsWith("지")) {
+                    problem = before + " 않고 있음";
+                } else {
+                    problem = before + "지 않고 있음";
+                }
+                action = parts[1].trim();
+            } else if (clean.includes("미흡한 바,")) {
+                const parts = clean.split("미흡한 바,");
+                const before = parts[0].trim();
+                if (before.endsWith("가")) {
+                    problem = before + " 미흡한 상태임";
+                } else {
+                    problem = before + "가 미흡한 상태임";
+                }
+                action = parts[1].trim();
+            } else {
+                if (isLacking) {
+                    problem = clean;
+                    // Generate a corresponding action based on the problem keyword
+                    if (clean.includes("미흡")) {
+                        action = clean.replace(/미흡함$/, "보완 및 개선 프로세스를 구축하십시오")
+                                      .replace(/미흡한 상태임$/, "모니터링을 통해 보완을 실시하십시오")
+                                      .replace(/주기가 미흡함$/, "의견 청취 주기를 단축하여 상시적인 피드백 체계를 갖추십시오");
+                    } else if (clean.includes("미비")) {
+                        action = clean.replace(/미비함$/, "상세 내역을 보완하고 투명성을 강화하십시오");
+                    } else if (clean.includes("보통의 수준임") || clean.includes("보통 수준")) {
+                        action = clean.replace(/보통의 수준임$/, "안전 예산 편성을 확대하고 재해 예방 투자를 늘려 관리 수준을 높이십시오")
+                                      .replace(/보통 수준임$/, "안전 관리 체계를 보완하여 수준을 고도화하십시오");
+                    } else if (clean.includes("부족")) {
+                        action = clean.replace(/부족함$/, "추가적인 예방 대책을 강구하십시오");
+                    }
+                } else if (isAction) {
+                    // Extract only the action instruction part (after 바, / 한 바, / 하는 바,)
+                    if (clean.includes("한 바,")) {
+                        action = clean.split("한 바,")[1].trim();
+                    } else if (clean.includes("하는 바,")) {
+                        action = clean.split("하는 바,")[1].trim();
+                    } else if (clean.includes("은 바,")) {
+                        action = clean.split("은 바,")[1].trim();
+                    } else {
+                        // Only use the whole sentence if it genuinely contains a directive
+                        // (권고/제언/필요함) and is not purely descriptive
+                        const hasDirective = /권고함|제언함|필요함|것을 권고|것을 제언|을 권고|을 제언/.test(clean);
+                        if (hasDirective) {
+                            action = clean;
+                        }
+                        // Otherwise skip — it's just a status description
+                    }
+                }
+            }
+
+            if (problem) {
+                problem = problem.replace(/^[,\s\.\-]+/, "")
+                                 .replace(/권고함$/, "")
+                                 .replace(/제언함$/, "")
+                                 .replace(/하는 바,?$/, "")
+                                 .replace(/한 바,?$/, "")
+                                 .replace(/\.?$/, "")
+                                 .trim();
+                // Ensure we don't append '상태임' to words already ending in Korean verb markers like '임', '함', '음', '됨', '남'
+                if (problem.endsWith("미비")) {
+                    problem = problem + "함";
+                }
+                if (!/[임함음됨남]$/.test(problem) && !problem.endsWith("상태임") && !problem.endsWith("수준임")) {
+                    problem = problem + " 상태임";
+                }
+                lackingPoints.push(problem);
+            }
+
+            if (action) {
+                action = action.replace(/^[,\s\.\-]+/, "").trim();
+
+                // Convert status description or positive sentence to a clear action guide
+                if (action.includes("미흡") || action.includes("미비") || action.includes("부재") || action.includes("보통") || action.includes("부족") || action.includes("제언")) {
+                    action = action.replace(/주기가 미흡함$/, "의견 청취 주기를 단축하여 상시 피드백 체계를 구축하십시오")
+                                   .replace(/주기가 미흡$/, "의견 청취 주기를 단축하여 상시 피드백 체계를 구축하십시오")
+                                   .replace(/구체적인 내역이 미비한 바$/, "예산 세부 내역을 산출하고 예비비를 편성하십시오")
+                                   .replace(/예산이 미비함$/, "구체적인 안전 예산 집행 계획을 수립하십시오")
+                                   .replace(/기록이 부족함$/, "결과 기록 대장에 점검자 및 조치 내역을 상세히 기록하십시오")
+                                   .replace(/미비함$/, "상세 내역을 수립하여 보완하십시오")
+                                   .replace(/미흡함$/, "보완 및 개선 프로세스를 실행하십시오")
+                                   .replace(/부족함$/, "보완 조치 및 대책을 강구하십시오")
+                                   .replace(/보통의 수준임$/, "안전 예산 편성을 확대하고 재해 예방 투자를 늘리십시오")
+                                   .replace(/보통 수준임$/, "안전 관리 체계를 상향 보완하여 수준을 고도화하십시오");
+                }
+
+                // General replacement of grammatical elements to sound like solutions
+                if (action.includes("상태는")) {
+                    action = action.replace("상태는", "상태를 개선하기 위해");
+                }
+                if (action.includes("주기가")) {
+                    action = action.replace("주기가", "주기를 단축하고");
+                }
+                if (action.includes("내역이")) {
+                    action = action.replace("내역이", "내역을 보완하여");
+                }
+                if (action.includes("채널을 보유하고 있으나")) {
+                    action = action.replace("채널을 보유하고 있으나", "채널의");
+                }
+
+                action = action.replace(/수립할\s+것을\s+권고함\.?$/, "수립하십시오")
+                               .replace(/보완할\s+것을\s+권고함\.?$/, "보완하십시오")
+                               .replace(/관리할\s+것을\s+권고함\.?$/, "관리하십시오")
+                               .replace(/개선할\s+것을\s+권고함\.?$/, "개선하십시오")
+                               .replace(/기록할\s+것을\s+권고함\.?$/, "기록하십시오")
+                               .replace(/지정할\s+것을\s+권고함\.?$/, "지정하십시오")
+                               .replace(/수립을\s+권고함\.?$/, "수립하십시오")
+                               .replace(/보완을\s+권고함\.?$/, "보완하십시오")
+                               .replace(/관리를\s+권고함\.?$/, "관리하십시오")
+                               .replace(/개선을\s+권고함\.?$/, "개선하십시오")
+                               .replace(/기록을\s+권고함\.?$/, "기록하십시오")
+                               .replace(/점검할\s+것을\s+제언함\.?$/, "점검하십시오")
+                               .replace(/점검을\s+제언함\.?$/, "점검하십시오")
+                               .replace(/권고함\.?$/, "권고합니다")
+                               .replace(/제언함\.?$/, "제언합니다")
+                               .replace(/요구됨\.?$/, "요구됩니다")
+                               .replace(/요망됨\.?$/, "요망됩니다")
+                               .replace(/필요함\.?$/, "필요합니다")
+                               .replace(/보완할 것$/, "보완하십시오")
+                               .replace(/수립할 것$/, "수립하십시오")
+                               .replace(/관리할 것$/, "관리하십시오")
+                               .replace(/개선할 것$/, "개선하십시오")
+                               .replace(/기록할 것$/, "기록하십시오")
+                               .replace(/지정할 것$/, "지정하십시오")
+                               .replace(/권고됨\.?$/, "권고됩니다")
+                               .replace(/제언됨\.?$/, "제언됩니다")
+                               .replace(/재해발생을\s+예방\s+노력/g, "재해발생 예방 노력")
+                               .replace(/예방\s+노력이/g, "예방을 위한 노력이")
+                               .replace(/항\s+목별/g, "항목별")
+                               .replace(/이행\s+하기/g, "이행하기")
+                               .trim();
+                
+                // Strip/skip generic advice
+                if (/이에\s*대\s*한\s*(관리|개선|보완|조치)/.test(action) || action === "관리를 권고합니다" || action === "개선을 권고합니다") {
+                    if (problem.includes("교육") && (problem.includes("시간") || problem.includes("이수"))) {
+                        action = "근로자 정기안전보건교육 법정 이수 시간을 준수하고 교육 대장을 보완하십시오";
+                    } else if (problem.includes("예산") || problem.includes("비용")) {
+                        action = "안전보건 예산 항목별 구체적인 산출 내역을 보완하여 예산을 수립하십시오";
+                    } else {
+                        // Skip if we don't have a specific mapping
+                        return;
+                    }
+                }
+                
+                // Safety check: if action is still identical to problem, transform it
+                if (action === problem) {
+                    action = action.replace(/상태임$/, "상태를 개선하고 보완 대책을 강구하십시오")
+                                   .replace(/수준임$/, "수준을 높이기 위한 방안을 마련하십시오");
+                }
+                actionPoints.push(action);
+            }
+        }
+    });
+
+    if (lackingPoints.length === 0 && actionPoints.length === 0) {
+        // Fallback: extract actionable instructions from sentences with explicit directives
+        sentences.forEach(s => {
+            let clean = s.trim().replace(/^[•\-\*\s\d\.\)]+/, "").trim()
+                         .replace(/동사의/g, '협력사의').replace(/동사는/g, '협력사는')
+                         .replace(/동사/g, '우리 회사').replace(/본 업체는/g, '협력사는').replace(/본 업체/g, '협력사');
+            if (clean.length < 15) return;
+            // Skip purely positive/descriptive sentences
+            if ((clean.includes("양호한 수준임") || clean.includes("우수한 수준임") || clean.includes("하고 있음") || clean.includes("있으며")) &&
+                !clean.includes("권고") && !clean.includes("제언") && !clean.includes("미흡") && !clean.includes("필요")) return;
+
+            // Extract only the instruction after 바, pivots
+            let instruction = "";
+            if (clean.includes("한 바,")) instruction = clean.split("한 바,").pop().trim();
+            else if (clean.includes("하는 바,")) instruction = clean.split("하는 바,").pop().trim();
+            else if (clean.includes("은 바,")) instruction = clean.split("은 바,").pop().trim();
+            else if (clean.includes("권고") || clean.includes("제언") || clean.includes("필요")) instruction = clean;
+
+            if (!instruction || instruction.length < 10) return;
+
+            // Convert verb endings to imperative commands
+            instruction = instruction
+                .replace(/수립할\s+것을\s+권고함\.?$/, "수립하십시오")
+                .replace(/보완할\s+것을\s+권고함\.?$/, "보완하십시오")
+                .replace(/관리할\s+것을\s+권고함\.?$/, "관리하십시오")
+                .replace(/개선할\s+것을\s+권고함\.?$/, "개선하십시오")
+                .replace(/실시할\s+것을\s+권고함\.?$/, "실시하십시오")
+                .replace(/참여할\s+것을\s+권고함\.?$/, "참여하십시오")
+                .replace(/지정할\s+것을\s+권고함\.?$/, "지정하십시오")
+                .replace(/기록할\s+것을\s+권고함\.?$/, "기록하십시오")
+                .replace(/할\s+것을\s+권고함\.?$/, "하십시오")
+                .replace(/권고함\.?$/, "권고합니다")
+                .replace(/제언함\.?$/, "실시하십시오")
+                .replace(/할\s+것을\s+제언함\.?$/, "하십시오")
+                .replace(/할\s+것을\s+당부함\.?$/, "하십시오")
+                .replace(/당부함\.?$/, "철저히 이행하십시오")
+                .replace(/권고됩니다\.?$/, "권고합니다")
+                .replace(/필요합니다\.?$/, "필요합니다")
+                .trim();
+
+            // Final filter: skip if it still looks like a status description (ends in 임/함/음 without imperative)
+            if (/[양호우수보통]한\s+수준임$/.test(instruction)) return;
+            if (instruction.endsWith("수준임") || instruction.endsWith("상태임") || instruction.endsWith("하고 있음")) return;
+            if (!/[시오요다]$/.test(instruction) && !instruction.includes("권고합니다") && !instruction.includes("필요합니다")) return;
+
+            actionPoints.push(instruction);
+        });
+    }
+
+    // De-duplicate and sort: company-specific sentences first, generic shared ones last
+    // We consider a sentence "more specific" if it contains numbers, dates, accident details,
+    // budget figures, or unique structural keywords unlikely to appear in every report.
+    function specificityScore(text) {
+        let score = 0;
+        if (/\d/.test(text)) score += 3;                     // contains numbers (건, 억원, 년 etc.)
+        if (text.includes('모의훈련')) score += 3;
+        if (text.includes('예산') && text.includes('내역')) score += 3;
+        if (text.includes('중대재해') || text.includes('산업재해')) score += 2;
+        if (text.includes('않은 바')) score += 2;
+        if (text.includes('미비한 바')) score += 2;
+        if (text.includes('분기') || text.includes('표창') || text.includes('인증')) score += 1;
+        return score;
+    }
+
+    const uniqueLacking = [...new Set(lackingPoints)].filter(x => x.length > 5)
+        .sort((a, b) => specificityScore(b) - specificityScore(a))
+        .slice(0, 4);
+    const uniqueActions = [...new Set(actionPoints)].filter(x => x.length > 5)
+        .sort((a, b) => specificityScore(b) - specificityScore(a))
+        .slice(0, 5);
+
+    let html = `
+        <div class="insight-block report-opinion-card" style="background: rgba(37, 99, 235, 0.04); border-left: 4px solid var(--primary); padding: 16px; border-radius: 8px; margin-bottom: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.02);">
+            <h4 style="margin-top:0; margin-bottom:12px; color: var(--text-primary); font-weight:700; display:flex; align-items:center; gap:8px; font-size:14.5px;">
+                <i class="fa-solid fa-lightbulb" style="color:var(--primary)"></i> 
+                평가기관 종합의견 기반 핵심 인사이트 및 보완 가이드
+            </h4>
+    `;
+
+    if (uniqueLacking.length > 0) {
+        html += `
+            <div class="opinion-sub-section" style="margin-bottom: 14px;">
+                <strong style="color: var(--danger); font-size: 13px; display: block; margin-bottom: 6px;"><i class="fa-solid fa-triangle-exclamation"></i> 협력사 안전관리 부족/개선 요소</strong>
+                <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
+                    ${uniqueLacking.map(pt => `<li>${pt}</li>`).join("")}
+                </ul>
+            </div>
+        `;
+    }
+
+    if (uniqueActions.length > 0) {
+        html += `
+            <div class="opinion-sub-section">
+                <strong style="color: var(--success); font-size: 13px; display: block; margin-bottom: 6px;"><i class="fa-solid fa-circle-check"></i> 권장 구체적 보완 행동 가이드</strong>
+                <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
+                    ${uniqueActions.map(pt => `<li>${pt}</li>`).join("")}
+                </ul>
+            </div>
+        `;
+    } else if (uniqueLacking.length === 0) {
+        html += `
+            <div class="opinion-sub-section">
+                <strong style="color: var(--success); font-size: 13px; display: block; margin-bottom: 6px;"><i class="fa-solid fa-circle-check"></i> 종합 안전 점검 의견</strong>
+                <p style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.6;">평가기관 결과 및 의견서 분석에 따르면, 안전보건 경영체계 구축 및 관리감독자 중심의 현장 교육 체계가 전반적으로 우수하며, 시급한 개선 요구 사항은 식별되지 않았습니다.</p>
+            </div>
+        `;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+// Extract custom insight from opinion text based on category keywords
+function getCustomizedInsight(comp, category, type) {
+    if (!comp || !comp.reportOpinion) return null;
+
+    const sentences = comp.reportOpinion.split(/\.\s+|\n/).map(s => s.trim().replace(/^[•\-\*\s\d\.\)]+/, "").trim()).filter(s => s.length > 10);
+    
+    const categoryKeywords = {
+        management: ["경영", "방침", "조직", "의지", "소장", "임명", "권한", "책임", "역할", "업무분장", "예산"],
+        system: ["교육", "운영관리", "훈련", "비상", "의견", "수렴", "소통", "채널", "지침서"],
+        risk: ["위험성", "평가", "유해", "위험", "투자", "예산", "비용", "관리비", "영수증", "증빙"],
+        performance: ["성과", "재해율", "재해", "사고", "TBM", "행동", "무재해", "보호구", "수칙"]
+    };
+
+    const targetKeywords = categoryKeywords[category];
+    const matchingSentences = sentences.filter(s => {
+        const matchesCategory = targetKeywords.some(kw => s.includes(kw));
+        if (!matchesCategory) return false;
+
+        if (type === 'weakness') {
+            return s.includes("미흡") || s.includes("미비") || s.includes("부재") || s.includes("부족") || s.includes("권고") || s.includes("제언") || s.includes("필요") || s.includes("요구") || s.includes("발생") || s.includes("우려");
+        } else {
+            return s.includes("양호") || s.includes("우수") || s.includes("취득") || s.includes("유지") || s.includes("원활") || s.includes("이행하고") || s.includes("실시하고") || s.includes("체계적");
+        }
+    });
+
+    if (matchingSentences.length > 0) {
+        let text = matchingSentences[0]
+            .replace(/동사의/g, '협력사의')
+            .replace(/동사는/g, '협력사는')
+            .replace(/동사/g, '우리 회사')
+            .replace(/본 업체는/g, '협력사는')
+            .replace(/본 업체/g, '협력사');
+            
+        if (!text.endsWith(".")) text += ".";
+        return text;
+    }
+
+    return null;
+}
+
+// Scan opinion text for critical or general accident history and build alert HTML if found
+function checkCriticalAccidents(opinionText) {
+    if (!opinionText) return null;
+    
+    // Split sentences by period followed by space, or newline to avoid splitting dates like '25.01
+    const sentences = opinionText.split(/\.\s+|\n/).map(s => s.trim()).filter(s => s.length > 5);
+    const criticalAlerts = [];
+    const generalAlerts = [];
+
+    sentences.forEach(s => {
+        const cleanSpace = s.replace(/\s+/g, "");
+        const isEval = (cleanSpace.includes("대비한계획") || cleanSpace.includes("대비계획") || cleanSpace.includes("위험에대비") || cleanSpace.includes("대비한")) && (cleanSpace.includes("수준") || cleanSpace.includes("우수") || cleanSpace.includes("양호"));
+        if (isEval) return;
+
+        const hasCritical = cleanSpace.includes("중대재해");
+        const hasGeneral = cleanSpace.includes("산업재해") || cleanSpace.includes("산재") || cleanSpace.includes("일반재해");
+
+        // Critical accident keywords (중대재해)
+        if (hasCritical) {
+            const isNoAccident = cleanSpace.includes("없는것으로") || cleanSpace.includes("전무") || cleanSpace.includes("없었") || cleanSpace.includes("없음") || cleanSpace.includes("이력이없") || cleanSpace.includes("발생사실이없") || cleanSpace.includes("발생하지않았") || cleanSpace.includes("발생하지않은") || cleanSpace.includes("0건") || cleanSpace.includes("0%") || cleanSpace.includes("무재해");
+            if (!isNoAccident && (cleanSpace.includes("발생") || cleanSpace.includes("건의") || cleanSpace.includes("이력") || cleanSpace.includes("존재"))) {
+                let clean = s.replace(/동사의/g, '협력사의')
+                             .replace(/동사는/g, '협력사는')
+                             .replace(/동사/g, '우리 회사')
+                             .replace(/본 업체는/g, '협력사는')
+                             .replace(/본 업체/g, '협력사')
+                             .trim();
+
+                // Truncate recommendations / opinions to keep only facts
+                const match = clean.match(/(.*?발생한\s+바|.*?발생하였으며|.*?발생하였으나|.*?발생하였고|.*?확인된\s+바|.*?존재하는\s+바)/);
+                if (match) {
+                    clean = match[1]
+                        .replace(/발생한\s+바$/, "발생")
+                        .replace(/발생하였으며$/, "발생")
+                        .replace(/발생하였으나$/, "발생")
+                        .replace(/발생하였고$/, "발생")
+                        .replace(/확인된\s+바$/, "확인")
+                        .replace(/존재하는\s+바$/, "존재");
+                }
+
+                // Also strip trailing ~함, ~됨, ~함. if they exist
+                clean = clean.replace(/발생함\.?$/, "발생")
+                             .replace(/존재함\.?$/, "존재")
+                             .replace(/확인됨\.?$/, "확인")
+                             .replace(/\.?$/, "")
+                             .trim();
+
+                // Clean prefix transitions (다만, 한편 등)
+                clean = clean.replace(/^(다만|한편|또한|그러나)\s*,?\s*/, "");
+
+                // Remove subject marker '가' for cleaner noun phrasing
+                clean = clean.replace(/재해가\s+발생/g, "재해 발생");
+
+                criticalAlerts.push(clean);
+            }
+        }
+        // General accident keywords (산업재해)
+        else if (hasGeneral) {
+            const isNoAccident = cleanSpace.includes("없는것으로") || cleanSpace.includes("전무") || cleanSpace.includes("없었") || cleanSpace.includes("없음") || cleanSpace.includes("이력이없") || cleanSpace.includes("발생사실이없") || cleanSpace.includes("발생하지않았") || cleanSpace.includes("발생하지않은") || cleanSpace.includes("0건") || cleanSpace.includes("0%") || cleanSpace.includes("안정") || cleanSpace.includes("양호") || cleanSpace.includes("무재해");
+            if (!isNoAccident && (cleanSpace.includes("발생") || cleanSpace.includes("건의") || cleanSpace.includes("재해율") || cleanSpace.includes("존재"))) {
+                let clean = s.replace(/동사의/g, '협력사의')
+                             .replace(/동사는/g, '협력사는')
+                             .replace(/동사/g, '우리 회사')
+                             .replace(/본 업체는/g, '협력사는')
+                             .replace(/본 업체/g, '협력사')
+                             .trim();
+
+                // Truncate recommendations / opinions to keep only facts
+                const match = clean.match(/(.*?발생한\s+바|.*?발생하였으며|.*?발생하였으나|.*?발생하였고|.*?확인된\s+바|.*?존재하는\s+바)/);
+                if (match) {
+                    clean = match[1]
+                        .replace(/발생한\s+바$/, "발생")
+                        .replace(/발생하였으며$/, "발생")
+                        .replace(/발생하였으나$/, "발생")
+                        .replace(/발생하였고$/, "발생")
+                        .replace(/확인된\s+바$/, "확인")
+                        .replace(/존재하는\s+바$/, "존재");
+                }
+
+                // Also strip trailing ~함, ~됨, ~함. if they exist
+                clean = clean.replace(/발생함\.?$/, "발생")
+                             .replace(/존재함\.?$/, "존재")
+                             .replace(/확인됨\.?$/, "확인")
+                             .replace(/\.?$/, "")
+                             .trim();
+
+                // Clean prefix transitions (다만, 한편 등)
+                clean = clean.replace(/^(다만|한편|또한|그러나)\s*,?\s*/, "");
+
+                // Remove subject marker '가' for cleaner noun phrasing
+                clean = clean.replace(/재해가\s+발생/g, "재해 발생");
+
+                generalAlerts.push(clean);
+            }
+        }
+    });
+
+    const validCrit = criticalAlerts.filter(a => a && a.trim().length > 0);
+    const validGen = generalAlerts.filter(a => a && a.trim().length > 0);
+
+    if (validCrit.length > 0 || validGen.length > 0) {
+        let alertHtml = `
+            <div class="accident-warning-box" style="margin-bottom: 18px; border-radius: 8px; overflow: hidden; border: 1.5px solid var(--danger); background: var(--card-bg); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.08);">
+                <div style="background: rgba(220, 38, 38, 0.07); padding: 12px 16px; border-bottom: 1px solid var(--card-border);">
+                    <strong style="color: var(--danger); font-size: 14px; display: flex; align-items: center; gap: 8px; font-weight: 800;">
+                        <i class="fa-solid fa-triangle-exclamation" style="font-size: 14px;"></i> 특이사항
+                    </strong>
+                </div>
+                <div style="padding: 12px 16px;">
+                    <ul style="margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--text-primary); line-height: 1.6; font-weight: 600;">
+        `;
+        
+        validCrit.forEach(alert => {
+            alertHtml += `<li style="margin-bottom: 6px; color: var(--danger);"><span style="color: var(--text-primary); font-weight: 700;">[중대재해]</span> ${alert}</li>`;
+        });
+        
+        validGen.forEach(alert => {
+            alertHtml += `<li style="margin-bottom: 6px; color: var(--warning);"><span style="color: var(--text-primary); font-weight: 500;">[산업재해]</span> ${alert}</li>`;
+        });
+        
+        alertHtml += `
+                    </ul>
+                </div>
+            </div>
+        `;
+        return alertHtml;
+    }
+
+    return null;
+}
+
 // Generate safety insights dynamically based on scores vs averages
 function generateSafetyInsights(comp, scores, averages) {
     const weaknesses = [];
@@ -976,75 +1532,97 @@ function generateSafetyInsights(comp, scores, averages) {
 
     // Management
     if (scores.management < averages.management) {
-        weaknesses.push(`<strong>경영조직</strong>(평균 대비 -${averages.management - scores.management}점)`);
-        weaknessesList.push(`<li><strong>안전보건방침 게시 및 조직 권한 강화:</strong> 대표이사 서명이 담긴 안전보건경영방침을 현장 사무실 초입에 즉시 게시하고 근로자 정기 교육 시 이를 낭독하십시오. 추가로 현장 소장 외 관리감독자 중 1인을 현장 안전담당자로 공식 임명하여 임무와 예산 집행 건의 권한을 문서로 부여하십시오.</li>`);
+        const diff = averages.management - scores.management;
+        weaknesses.push(`<strong>경영조직</strong>(평균 대비 -${diff}점)`);
+        
+        const customText = getCustomizedInsight(comp, 'management', 'weakness');
+        const defaultText = `<strong>안전보건방침 게시 및 권한 부여 보완:</strong> ${comp.name}의 ${comp.trade} 공정 특성에 맞추어 대표이사 서명이 포함된 경영방침을 현장에 신속히 게시하고, 관리감독자의 안전관리 권한 위임과 예산 전결 건의 절차를 체계적으로 수립하십시오.`;
+        weaknessesList.push(`<li>${customText ? `<strong>보고서 기반 세부 개선 권고:</strong> ` + customText : defaultText}</li>`);
     } else {
         const diff = scores.management - averages.management;
         strengths.push(`<strong>경영조직</strong>(평균 대비 +${diff}점)`);
-        strengthsList.push(`<li><strong>안전보건경영 의지 우수:</strong> 경영진의 안전경영 관심도가 높고 안전보건방침이 체계적으로 관리되고 있으며, 예산 및 조치 권한 체계가 공종 평균 이상으로 우수합니다.</li>`);
+        
+        const customText = getCustomizedInsight(comp, 'management', 'strength');
+        const defaultText = `<strong>경영진의 안전관리 의지 및 체계 수립:</strong> ${comp.name}의 경영진이 수립한 안전보건방침과 조직 체계가 우수하며, 안전보건경영시스템(ISO 45001) 인증 유지와 예산 배정이 공종 평균 대비 선제적입니다.`;
+        strengthsList.push(`<li>${customText ? `<strong>보고서 기반 우수 요소:</strong> ` + customText : defaultText}</li>`);
     }
 
     // System
     if (scores.system < averages.system) {
-        weaknesses.push(`<strong>안전체계/교육</strong>(평균 대비 -${averages.system - scores.system}점)`);
-        weaknessesList.push(`<li><strong>법정 안전교육 이수 및 비상대응 훈련 실체화:</strong> 법정 정기안전보건교육 이수율 100% 달성을 위해 교육 전 출결 확인용 근로자 수기 서명부와 교육 전경 사진 대장을 상시 작성하여 관리하십시오. 연 2회 이상 추락·화재·질식 등 현장 공정에 적합한 비상 시나리오를 수립해 실제 대피 모의 훈련을 실시하고 결과 보고서를 증빙물로 확보하십시오.</li>`);
+        const diff = averages.system - scores.system;
+        weaknesses.push(`<strong>안전체계/교육</strong>(평균 대비 -${diff}점)`);
+        
+        const customText = getCustomizedInsight(comp, 'system', 'weakness');
+        const defaultText = `<strong>법정 교육 및 비상대응 실질화:</strong> ${comp.name}의 현장 근로자 전원이 법정 안전 보건 교육을 이수하도록 서명부를 관리하고, 비상대피 시나리오에 따른 가상 훈련을 연 2회 이상 실시하여 증빙물로 확보하십시오.`;
+        weaknessesList.push(`<li>${customText ? `<strong>보고서 기반 세부 개선 권고:</strong> ` + customText : defaultText}</li>`);
     } else {
         const diff = scores.system - averages.system;
         strengths.push(`<strong>안전체계/교육</strong>(평균 대비 +${diff}점)`);
-        strengthsList.push(`<li><strong>안전 교육 및 모니터링 이행 견고:</strong> 근로자 법정안전교육 이수 관리가 체계적이며, 정기적인 소통과 안전점검 체계가 모범적으로 실행되고 있습니다.</li>`);
+        
+        const customText = getCustomizedInsight(comp, 'system', 'strength');
+        const defaultText = `<strong>체계적인 안전 교육 및 소통 운영:</strong> 근로자 법정 교육 관리가 명확하며, 현장 근로자 협의체를 통한 적극적인 소통 및 의견 청취 활동이 지속적으로 원활하게 이루어지고 있습니다.`;
+        strengthsList.push(`<li>${customText ? `<strong>보고서 기반 우수 요소:</strong> ` + customText : defaultText}</li>`);
     }
 
     // Risk
     if (scores.risk < averages.risk) {
-        weaknesses.push(`<strong>위험평가/투자</strong>(평균 대비 -${averages.risk - scores.risk}점)`);
-        weaknessesList.push(`<li><strong>근로자 참여 위험성평가 시행 및 안전예산 증빙 보완:</strong> 매주 작업 개시 전 협력업체 소장과 근로자 대표가 참여하는 '위험성평가 검토 회의'를 개최하고, 아차사고 발굴 일지를 작성하여 보관하십시오. 산업안전보건관리비(안전 장구류 구매, 안전펜스 설치 등) 집행 시 구매 영수증, 세금계산서, 현장 설치 전후 사진을 월별 대장으로 정리하여 명확하게 투자 비용을 증빙하십시오.</li>`);
+        const diff = averages.risk - scores.risk;
+        weaknesses.push(`<strong>위험평가/투자</strong>(평균 대비 -${diff}점)`);
+        
+        const customText = getCustomizedInsight(comp, 'risk', 'weakness');
+        const defaultText = `<strong>근로자 참여 위험성평가 및 예산 관리:</strong> ${comp.name}의 소장 및 근로자 대표가 함께 참여하는 위험성평가 회의록을 주기적으로 작성하고, ${comp.trade} 현장의 산업안전보건관리비 예산 집행 세금계산서와 설치 전후 사진을 매월 대장으로 보완하십시오.`;
+        weaknessesList.push(`<li>${customText ? `<strong>보고서 기반 세부 개선 권고:</strong> ` + customText : defaultText}</li>`);
     } else {
         const diff = scores.risk - averages.risk;
         strengths.push(`<strong>위험평가/투자</strong>(평균 대비 +${diff}점)`);
-        strengthsList.push(`<li><strong>선제적 위험 통제 및 충실한 예산 투입:</strong> 작업자 의견 수렴을 통한 일상적 위험 요인 도출 프로세스가 활성화되어 있으며, 안전 예산이 적기에 투명하게 집행되고 있습니다.</li>`);
+        
+        const customText = getCustomizedInsight(comp, 'risk', 'strength');
+        const defaultText = `<strong>선제적 위험 통제 및 충실한 안전 투자:</strong> ${comp.trade} 공종의 위험 요소를 사전에 적극적으로 차단하기 위한 일상적 위험성평가 프로세스가 활성화되어 있고 안전 투자가 적시에 이행되고 있습니다.`;
+        strengthsList.push(`<li>${customText ? `<strong>보고서 기반 우수 요소:</strong> ` + customText : defaultText}</li>`);
     }
 
     // Performance
     if (scores.performance < averages.performance) {
-        weaknesses.push(`<strong>안전성과</strong>(평균 대비 -${averages.performance - scores.performance}점)`);
-        weaknessesList.push(`<li><strong>일일 TBM 및 부적격 행동 관리 체계화:</strong> 매일 작업 시작 전 10분 동안 실시하는 TBM(Tool Box Meeting) 일지에 당일 작업의 유해위험 요인과 근로자 서명을 누락 없이 관리하십시오. 보호구 미착용 등 안전 수칙 위반자에 대해 3단계 경고장 발부 절차를 운영하고, 지적 사항에 대한 개선 전후 사진 조치 보고 대장을 일일 안전 성과 지표로 축적해 나가십시오.</li>`);
+        const diff = averages.performance - scores.performance;
+        weaknesses.push(`<strong>안전성과</strong>(평균 대비 -${diff}점)`);
+        
+        const customText = getCustomizedInsight(comp, 'performance', 'weakness');
+        const defaultText = `<strong>일일 TBM 및 행동 수칙 기록:</strong> 매일 작업 개시 전 TBM 회의 일지와 참석자 서명부를 철저히 관리하고, 현장 안전 위반 행위자에 대한 3단계 경고 절차 운영 실적을 일일 안전 성과 지표로 모니터링하십시오.`;
+        weaknessesList.push(`<li>${customText ? `<strong>보고서 기반 세부 개선 권고:</strong> ` + customText : defaultText}</li>`);
     } else {
         const diff = scores.performance - averages.performance;
         strengths.push(`<strong>안전성과</strong>(평균 대비 +${diff}점)`);
-        strengthsList.push(`<li><strong>현장 밀착형 재해 방지 성과 탁월:</strong> 실질적인 무재해 기간 및 성과가 우수하며, 일일 현장 TBM 이행 관리와 불안전 행동 개선 예방 실적이 매우 긍정적입니다.</li>`);
+        
+        const customText = getCustomizedInsight(comp, 'performance', 'strength');
+        const defaultText = `<strong>현장 밀착형 재해 예방 및 안전 성과:</strong> 동종업 평균 재해율 대비 0% 수준의 철저한 무재해 실적을 보이고 있으며, 일일 TBM 활동이 활성화되어 불안전한 행동 예방 효과를 거두고 있습니다.`;
+        strengthsList.push(`<li>${customText ? `<strong>보고서 기반 우수 요소:</strong> ` + customText : defaultText}</li>`);
     }
 
     let html = '';
 
-    // 1. Render Strengths (우수 관리 항목)
-    if (strengths.length > 0) {
-        html += `
-            <div class="insight-block maintenance">
-                <h4><i class="fa-solid fa-circle-check" style="color:var(--success)"></i> 공종 평균 대비 우수 항목</h4>
-                <p>평균 대비 양호한 성과를 보이고 있는 분야입니다: ${strengths.join(", ")}</p>
-                <ul>
-                    ${strengthsList.join("")}
-                </ul>
-            </div>
-        `;
+    // Check critical accidents first and prepend it if exists
+    if (comp && comp.reportOpinion) {
+        const accidentAlert = checkCriticalAccidents(comp.reportOpinion);
+        if (accidentAlert) {
+            html += accidentAlert;
+        }
     }
 
-    // 2. Render Weaknesses & Action Plan (취약 항목 및 권고안)
-    if (weaknesses.length > 0) {
-        html += `
-            <div class="insight-block vulnerability" style="margin-top: 10px; border-top: 1px dashed var(--card-border); padding-top: 10px;">
-                <h4><i class="fa-solid fa-triangle-exclamation"></i> 공종 평균 대비 취약 항목</h4>
-                <p>보완이 시급한 지표입니다: ${weaknesses.join(", ")}</p>
-            </div>
-            <div class="insight-block action-plan">
-                <h4><i class="fa-solid fa-hand-holding-hand"></i> 구체적 개선 조치 권고</h4>
-                <ul>
-                    ${weaknessesList.join("")}
-                </ul>
-            </div>
-        `;
+    // Render Summarized Report Opinion for Subcontractor
+    if (comp && comp.reportOpinion) {
+        html += summarizeOpinionForSubcontractor(comp.reportOpinion);
     }
 
+    return html;
+}
+
+// generateSafetyInsightsOnly: same as generateSafetyInsights but WITHOUT accident alert (handled in separate div)
+function generateSafetyInsightsOnly(comp, scores, averages) {
+    // Build the same insights/action guide HTML but skip accident alert
+    let html = '';
+    if (comp && comp.reportOpinion) {
+        html += summarizeOpinionForSubcontractor(comp.reportOpinion);
+    }
     return html;
 }
 
@@ -1056,6 +1634,8 @@ function updateDetailedView() {
         document.getElementById("detail-basic-info-card").innerHTML = `<div class="empty-state">선택된 협력업체가 없습니다.</div>`;
         document.getElementById("details-comparison-table").innerHTML = "";
         document.getElementById("detail-insights-container").innerHTML = "";
+        const alertEl = document.getElementById("detail-accident-alert");
+        if (alertEl) alertEl.innerHTML = "";
         return;
     }
     
@@ -1095,7 +1675,7 @@ function updateDetailedView() {
     basicInfoCard.innerHTML = `
         <div class="info-card-header">
             <h3>${comp1.name}</h3>
-            <span class="badge grade-badge" style="background-color: ${getGradeColor(grade1)}">${grade1} (${Math.round(score1)}점)</span>
+            <span class="badge grade-badge" style="background-color: ${getGradeColor(grade1)}; font-size: 14px; padding: 4px 12px; font-weight: 800;">${grade1} (${Math.round(score1)}점)</span>
         </div>
         <div class="info-card-body">
             <div class="info-row">
@@ -1121,6 +1701,9 @@ function updateDetailedView() {
     statement.innerHTML = `본 업체는 <strong>${comp1.trade}</strong> 등록 업체 ${tradeComps.length}개 중 상위 <strong>${percentile}%</strong>(${rank}위)에 해당합니다.`;
 
     // 3. Render Table
+    const companyAvg = Math.round((comp1Scores.management + comp1Scores.system + comp1Scores.risk + comp1Scores.performance) / 4 * 10) / 10;
+    const tradeAvg = Math.round((tradeAverages.management + tradeAverages.system + tradeAverages.risk + tradeAverages.performance) / 4 * 10) / 10;
+
     table.innerHTML = `
         <thead>
             <tr>
@@ -1158,8 +1741,19 @@ function updateDetailedView() {
         </tbody>
     `;
 
-    // 4. Render Insights
-    insightsContainer.innerHTML = generateSafetyInsights(comp1, comp1Scores, tradeAverages);
+    // 4. Render Accident Alert (separate, always visible)
+    const accidentAlertEl = document.getElementById('detail-accident-alert');
+    if (accidentAlertEl) {
+        if (comp1 && comp1.reportOpinion) {
+            const accidentHtml = checkCriticalAccidents(comp1.reportOpinion);
+            accidentAlertEl.innerHTML = accidentHtml || '';
+        } else {
+            accidentAlertEl.innerHTML = '';
+        }
+    }
+
+    // 5. Render Insights (without accident alert prepended)
+    insightsContainer.innerHTML = generateSafetyInsightsOnly(comp1, comp1Scores, tradeAverages);
 
     // 5. Render Radar Chart
     renderRadarChartSingle(comp1.name, comp1Scores, tradeAverages);
@@ -1207,7 +1801,8 @@ function updateDetailedView() {
 }
 
 function getDiffSpan(score, avg) {
-    const diff = score - avg;
+    let diff = score - avg;
+    diff = Math.round(diff * 10) / 10;
     if (diff > 0) {
         return `<span class="text-primary" style="font-weight:700;">+${diff}</span>`;
     } else if (diff < 0) {
