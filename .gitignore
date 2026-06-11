@@ -1,0 +1,15 @@
+# Git Ignore List
+node_modules/
+.DS_Store
+
+# Exclude sensitive raw PDFs
+공종/
+*.pdf
+
+# Exclude SQLite Database
+*.db
+
+# Exclude debug and automation scripts
+scratch_*.py
+export_json.py
+db_pipeline.py

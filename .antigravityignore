@@ -1,0 +1,8 @@
+# Antigravity ignore patterns
+.git/
+node_modules/
+dist/
+build/
+.antigravity/
+.gemini/
+*.log
