@@ -2198,13 +2198,38 @@ function setupDBUpdateAndExport() {
             const files = event.target.files;
             if (!files || files.length === 0) return;
 
+            const pdfFiles = Array.from(files).filter(file => file.name.toLowerCase().endsWith(".pdf"));
+            if (pdfFiles.length === 0) {
+                alert("선택한 폴더에 PDF 파일이 존재하지 않습니다.");
+                pdfFileInput.value = "";
+                return;
+            }
+
+            const progressModal = document.getElementById("progress-modal");
+            const progressText = document.getElementById("progress-text");
+            const progressBar = document.getElementById("progress-bar");
+
+            if (progressModal) {
+                progressModal.style.display = "flex";
+                progressBar.style.width = "0%";
+                progressText.textContent = `준비 중... (총 ${pdfFiles.length}개 파일)`;
+            }
+
+            // Small delay to show start of modal before freezing
+            await new Promise(resolve => setTimeout(resolve, 200));
+
             let parsedCount = 0;
             let errorCount = 0;
 
-            for (let file of files) {
-                if (!file.name.toLowerCase().endsWith(".pdf")) {
-                    continue;
+            for (let i = 0; i < pdfFiles.length; i++) {
+                const file = pdfFiles[i];
+                if (progressText) {
+                    progressText.textContent = `[${i + 1}/${pdfFiles.length}] ${file.name} 분석 중...`;
                 }
+                
+                // Allow browser to render text update
+                await new Promise(resolve => setTimeout(resolve, 50));
+
                 try {
                     const text = await extractTextFromPdf(file);
                     const newCompany = parsePdfData(file.name, file.webkitRelativePath, text);
@@ -2221,6 +2246,16 @@ function setupDBUpdateAndExport() {
                     console.error(`Error parsing file ${file.name}:`, err);
                     errorCount++;
                 }
+
+                if (progressBar) {
+                    const percent = Math.round(((i + 1) / pdfFiles.length) * 100);
+                    progressBar.style.width = `${percent}%`;
+                }
+            }
+
+            // Hide progress modal after completion
+            if (progressModal) {
+                progressModal.style.display = "none";
             }
 
             // Save to LocalStorage
