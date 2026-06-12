@@ -2194,6 +2194,9 @@ function setupDBUpdateAndExport() {
             let errorCount = 0;
 
             for (let file of files) {
+                if (!file.name.toLowerCase().endsWith(".pdf")) {
+                    continue;
+                }
                 try {
                     const text = await extractTextFromPdf(file);
                     const newCompany = parsePdfData(file.name, text);
