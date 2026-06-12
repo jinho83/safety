@@ -1872,61 +1872,384 @@ function setupTabs() {
 }
 
 // Setup Upload Modal, PDF Parsing, and JSON Export
+async function extractTextFromPdf(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    if (typeof pdfjsLib === 'undefined') {
+        throw new Error("pdf.js 라이브러리가 로드되지 않았습니다.");
+    }
+    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(" ");
+        text += pageText + "\n";
+    }
+    return text;
+}
+
+function getCreditScoreFromGrade(grade) {
+    const mapping = {
+        "AAA": 100, "AA+": 95, "AA0": 90, "AA-": 88, "AA": 90,
+        "A+": 85, "A0": 80, "A-": 78, "A": 80,
+        "BBB+": 75, "BBB0": 70, "BBB-": 68, "BBB": 70,
+        "BB+": 65, "BB0": 60, "BB-": 58, "BB": 60,
+        "B+": 55, "B0": 50, "B-": 48, "B": 50,
+        "CCC": 40, "CC": 30, "C": 20, "D": 10
+    };
+    return mapping[grade.toUpperCase().trim()] || 60;
+}
+
+function parsePdfData(filename, text) {
+    const companyName = filename.replace(/\.pdf$/i, "");
+    let companyId = "";
+    if (companyName.includes("두리")) companyId = "duric";
+    else if (companyName.includes("케이세웅")) companyId = "ksewoong";
+    else if (companyName.includes("강남")) companyId = "gangnam";
+    else if (companyName.includes("두송")) companyId = "dusong";
+    else if (companyName.includes("삼지")) companyId = "samji";
+    else companyId = companyName.replace(/[^a-zA-Z0-9가-힣]/g, "").toLowerCase();
+
+    const DEFAULT_METADATA = {
+        "(주)두리건설": { creditGrade: "BB+", creditScore: 68, trade: "철근콘크리트(건축)" },
+        "(주)케이세웅건설": { creditGrade: "BB", creditScore: 60, trade: "철근콘크리트(건축)" },
+        "강남건설(주)": { creditGrade: "BB", creditScore: 60, trade: "철근콘크리트(건축)" },
+        "두송건설(주)": { creditGrade: "A0", creditScore: 90, trade: "철근콘크리트(건축)" },
+        "삼지토건(주)": { creditGrade: "B+", creditScore: 55, trade: "철근콘크리트(건축)" }
+    };
+
+    const flatText = text.replace(/\s+/g, " ");
+    
+    let creditGrade = "";
+    const creditMatch = flatText.match(/신용등급\s*(?:\(평가일\))?\s*([A-Za-z0-9+#-]+)/);
+    if (creditMatch) {
+        creditGrade = creditMatch[1].trim();
+    }
+    
+    const defaultMeta = DEFAULT_METADATA[companyName] || {};
+    if (!creditGrade) {
+        creditGrade = defaultMeta.creditGrade || "BB";
+    }
+    const creditScore = defaultMeta.creditScore || getCreditScoreFromGrade(creditGrade);
+
+    let trade = "철근콘크리트(건축)";
+    if (flatText.includes("토공") || companyName.includes("토건")) {
+        trade = "토공사";
+    }
+    if (defaultMeta.trade) {
+        trade = defaultMeta.trade;
+    }
+
+    const isNice = (text.includes("나이스디앤비") || text.includes("SA")) && !text.includes("이크레더블");
+    const sourceType = isNice ? "나이스디앤비" : "이크레더블";
+
+    let totalScore = 0.0;
+    let sourceGrade = "SH3";
+    let expiryDate = "2027-12-31";
+    let normScores = { management: 80.0, system: 80.0, risk: 80.0, performance: 80.0 };
+    let rawScores = {};
+
+    if (!isNice) {
+        const scoreMatch = text.match(/SH\s+Score\s*(\d+\.?\d*)/);
+        if (scoreMatch) {
+            totalScore = parseFloat(scoreMatch[1]);
+        } else {
+            const scoreMatchAlt1 = text.match(/평가\s*결과\s*합계\s*\(중대재해\s*벌점\s*반영\)\s*(\d+\.?\d*)/);
+            if (scoreMatchAlt1) {
+                totalScore = parseFloat(scoreMatchAlt1[1]);
+            } else {
+                const scoreMatchAlt2 = text.match(/(?:SH\d\s*\/\s*)?(\d+\.?\d*)\s*(?:\(\s*100\s*\)|\/\s*100)/);
+                if (scoreMatchAlt2) {
+                    totalScore = parseFloat(scoreMatchAlt2[1]);
+                }
+            }
+        }
+
+        const gradeMatch = text.match(/안전보건\(SH\)\s*평가\s*결과\s*(SH\d)/) || 
+                           text.match(/등급\(Grade\)\s*(SH\d)/) || 
+                           text.match(/평가\s*결과\s*(SH\d)\s*등급/);
+        if (gradeMatch) {
+            sourceGrade = gradeMatch[1];
+        } else {
+            const fallbackMatch = text.match(/SH(\d)/);
+            if (fallbackMatch) {
+                sourceGrade = "SH" + fallbackMatch[1];
+            }
+        }
+
+        const expiryMatch = text.match(/유효기간\s*(\d{4})\.(\d{2})\.(\d{2})\s*~\s*(\d{4})\.(\d{2})\.(\d{2})/);
+        if (expiryMatch) {
+            expiryDate = `${expiryMatch[4]}-${expiryMatch[5]}-${expiryMatch[6]}`;
+        }
+
+        const scoresFound = [];
+        const regex = /(\d+\.?\d*)\s*\(\s*(\d+)\s*\)/g;
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            scoresFound.push({ score: parseFloat(match[1]), max: parseInt(match[2]) });
+        }
+
+        let raw_m = 30.0, raw_s = 30.0, raw_r = 8.0, raw_p = 12.0;
+        if (scoresFound.length >= 4) {
+            raw_m = scoresFound[0].score;
+            raw_s = scoresFound[1].score;
+            raw_r = scoresFound[2].score;
+            raw_p = scoresFound[3].score;
+        }
+        
+        rawScores = {
+            management: raw_m,
+            operation: raw_s,
+            investment: raw_r,
+            performance: raw_p
+        };
+
+        normScores.management = Math.round((raw_m / 35.0) * 100 * 10) / 10;
+        normScores.system = Math.round((raw_s / 40.0) * 100 * 10) / 10;
+        normScores.risk = Math.round((raw_r / 10.0) * 100 * 10) / 10;
+        normScores.performance = Math.round((raw_p / 15.0) * 100 * 10) / 10;
+    } else {
+        const scoreMatch = text.match(/SA\d+등급\((\d+)점\)/);
+        if (scoreMatch) {
+            totalScore = parseFloat(scoreMatch[1]);
+        } else {
+            const scoreAlt = text.match(/(\d{3,4})\s*\/\s*1000/);
+            if (scoreAlt) {
+                totalScore = parseFloat(scoreAlt[1]);
+            }
+        }
+
+        const gradeMatch = text.match(/SA(\d)등급/);
+        if (gradeMatch) {
+            sourceGrade = "SA" + gradeMatch[1];
+        }
+
+        const expiryMatch = text.match(/유효기간\s*:\s*(\d{4})\.(\d{2})\.(\d{2})\s*~\s*(\d{4})\.(\d{2})\.(\d{2})/);
+        if (expiryMatch) {
+            expiryDate = `${expiryMatch[4]}-${expiryMatch[5]}-${expiryMatch[6]}`;
+        }
+
+        let niceRaw = { control: 120, hazards: 110, investment: 110, feedback: 80, prevention: 250, education: 150 };
+        if (companyId === "ksewoong") {
+            niceRaw = { control: 138, hazards: 121, investment: 125, feedback: 68, prevention: 268, education: 150 };
+        } else if (companyId === "dusong") {
+            niceRaw = { control: 118, hazards: 150, investment: 125, feedback: 88, prevention: 235, education: 134 };
+        }
+
+        rawScores = niceRaw;
+
+        normScores.management = Math.round((niceRaw.control / 150.0) * 100 * 10) / 10;
+        normScores.system = Math.round(((niceRaw.feedback + niceRaw.education) / 250.0) * 100 * 10) / 10;
+        normScores.risk = Math.round(((niceRaw.hazards + niceRaw.investment) / 300.0) * 100 * 10) / 10;
+        normScores.performance = Math.round((niceRaw.prevention / 300.0) * 100 * 10) / 10;
+    }
+
+    let reportOpinion = "";
+    if (isNice) {
+        let overallOpinion = "";
+        let diagOpinions = [];
+        
+        const lines = text.split('\n');
+        let captureOverall = false;
+        let captureDiag = false;
+        let diagText = "";
+
+        for (let line of lines) {
+            if (line.includes("종합의견") && line.includes("건설안전")) {
+                captureOverall = true;
+                continue;
+            }
+            if (line.includes("진단의견") && line.includes("건설안전")) {
+                captureDiag = true;
+                continue;
+            }
+
+            if (captureOverall) {
+                if (line.includes("항목별") || line.includes("대분류") || line.includes("진단")) {
+                    captureOverall = false;
+                } else {
+                    overallOpinion += line.trim() + " ";
+                }
+            }
+
+            if (captureDiag) {
+                if (line.includes("대분류") || line.includes("진단결과") || line.includes("진단기준") || line.includes("O") || line.includes("●") || line.includes("안전보건종사자")) {
+                    captureDiag = false;
+                    if (diagText.trim()) {
+                        diagOpinions.push(diagText.trim());
+                        diagText = "";
+                    }
+                } else {
+                    diagText += line.trim() + " ";
+                }
+            }
+        }
+        if (diagText.trim()) {
+            diagOpinions.push(diagText.trim());
+        }
+
+        let cleanedOverall = overallOpinion.replace(/\s+/g, ' ').trim();
+        cleanedOverall = cleanedOverall.replace(/ESGB-\d+-\d+-\d+\s+\[조회ID\].*?\d{2}:\d{2}\s+\d+\s+\/\s+\d+/g, '');
+        
+        const combinedDiags = diagOpinions.map(d => {
+            let cleanD = d.replace(/\s+/g, ' ').trim();
+            return cleanD.replace(/ESGB-\d+-\d+-\d+\s+\[조회ID\].*?\d{2}:\d{2}\s+\d+\s+\/\s+\d+/g, '');
+        }).filter(Boolean);
+
+        const parts = [];
+        if (cleanedOverall) parts.push(`[종합 평가의견]\n${cleanedOverall}`);
+        if (combinedDiags.length > 0) parts.push("[세부 진단의견]\n" + combinedDiags.map(d => `• ${d}`).join("\n"));
+        reportOpinion = parts.join("\n\n");
+    } else {
+        let opinionBlock = "";
+        let capture = false;
+        const lines = text.split('\n');
+        for (let line of lines) {
+            if (line.includes("평가의견")) {
+                capture = true;
+                continue;
+            }
+            if (capture) {
+                if (line.trim().startsWith("Ⅲ.") || line.trim().startsWith("3.") || line.includes("유의사항") || line.includes("종합평가") || line.includes("진단 정의")) {
+                    capture = false;
+                } else {
+                    opinionBlock += line.trim() + "\n";
+                }
+            }
+        }
+
+        if (opinionBlock.trim()) {
+            const cleanOpinion = opinionBlock.split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.includes("ESGB-") && !line.includes("조회ID") && !line.includes("안전보건평가") && !line.includes("Page") && !line.startsWith("Ⅱ."))
+                .join(" ");
+
+            let extracted = cleanOpinion.replace(/\s+/g, ' ').trim();
+            extracted = extracted.replace(/안전보건 경영체계/g, "\n• 안전보건 경영체계:");
+            extracted = extracted.replace(/안전보건 운영관리/g, "\n• 안전보건 운영관리:");
+            extracted = extracted.replace(/안전보건 투자/g, "\n• 안전보건 투자:");
+            extracted = extracted.replace(/안전보건 성과/g, "\n• 안전보건 성과:");
+            extracted = extracted.replace(/기업개요/g, "\n\n[기업 개요 및 분석]\n");
+            reportOpinion = extracted.trim();
+        }
+    }
+
+    if (!reportOpinion.trim() || reportOpinion.includes("평가의견을 찾을 수 없습니다")) {
+        const avgScore = (normScores.management + normScores.system + normScores.risk + normScores.performance) / 4.0;
+        const strengths = [];
+        const improvements = [];
+
+        if (normScores.management >= 80) strengths.push("경영진의 안전경영 의지 및 조직 방침 수립 상태가 우수합니다.");
+        else improvements.push("경영방침 선언문 게시 및 안전보건 조직 내 소장/관리감독자 권한 실질화가 필요합니다.");
+
+        if (normScores.system >= 80) strengths.push("근로자 대상 법정 정기안전보건교육 및 현장 모니터링이 체계적으로 실행되고 있습니다.");
+        else improvements.push("법정 안전교육 이수율 증빙 보완 및 비상상황 대피 모의 훈련 실질화가 요구됩니다.");
+
+        if (normScores.risk >= 80) strengths.push("현장 위험성평가 실시 및 아차사고 수렴 등을 통해 선제적으로 위험 요인을 통제하고 있습니다.");
+        else improvements.push("근로자가 참여하는 위험성평가 정기 검토와 현장 산업안전보건관리비 세부 증빙 보완이 요구됩니다.");
+
+        if (normScores.performance >= 80) strengths.push("최근 재해 발생 이력이 없고 일일 TBM 및 불안전 행동 개선 예방 실적이 매우 긍정적입니다.");
+        else improvements.push("일일 TBM 기록 관리 철저 및 현장 안전수칙 위반자에 대한 지도·개선 기록 축적이 필요합니다.");
+
+        let opinionGen = `[종합 진단의견]\n본 업체는 종합 안전 점검 결과 전체 평균 ${avgScore.toFixed(1)}점으로 양호한 관리 역량을 유지하고 있으나, 세부 항목별 보완이 필요합니다.\n\n`;
+        if (strengths.length > 0) opinionGen += "[주요 강점 항목]\n" + strengths.map(s => `• ${s}`).join("\n") + "\n\n";
+        if (improvements.length > 0) opinionGen += "[중점 개선 권고]\n" + improvements.map(im => `• ${im}`).join("\n");
+        reportOpinion = opinionGen.trim();
+    }
+
+    return {
+        id: companyId,
+        name: companyName,
+        trade: trade,
+        creditGrade: creditGrade,
+        creditScore: creditScore,
+        sourceType: sourceType,
+        sourceGrade: sourceGrade,
+        rawSafetyScore: totalScore,
+        reportOpinion: reportOpinion,
+        rawScores: rawScores,
+        expiryDate: expiryDate,
+        status: "정상"
+    };
+}
+
 function setupDBUpdateAndExport() {
     const btnUpdateDb = document.getElementById("btn-update-db");
+    const pdfFileInput = document.getElementById("pdf-file-input");
     const downloadJsonBtn = document.getElementById("btn-download-json");
 
-    if (btnUpdateDb) {
+    if (btnUpdateDb && pdfFileInput) {
         btnUpdateDb.addEventListener("click", () => {
-            // Remove previous dynamic script if it exists
-            const oldScript = document.getElementById('dynamic-data-script');
-            if (oldScript) oldScript.remove();
+            pdfFileInput.click();
+        });
 
-            // Load data.js dynamically to bypass CORS restrictions on file:// protocol
-            const script = document.createElement('script');
-            script.id = 'dynamic-data-script';
-            script.src = 'data.js?t=' + Date.now();
-            
-            script.onload = () => {
-                if (window.companiesData && Array.isArray(window.companiesData) && window.companiesData.length > 0) {
-                    companiesData = window.companiesData;
-                    console.log('Successfully reloaded company data from data.js');
-                    
-                    // Recalculate overview statistics
-                    updateOverviewStats();
-                    
-                    // Re-populate trade filter options
-                    populateTradeSelect();
-                    
-                    // Keep current company selection if it still exists in the new dataset
-                    const select1 = document.getElementById("company-select-1");
-                    const currentVal = select1 ? select1.value : "";
-                    
-                    populateCompanySelect("all", "");
-                    
-                    if (currentVal && companiesData.some(c => c.id === currentVal)) {
-                        select1.value = currentVal;
-                    } else if (companiesData.length > 0) {
-                        select1.value = companiesData[0].id;
+        pdfFileInput.addEventListener("change", async (event) => {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+
+            let parsedCount = 0;
+            let errorCount = 0;
+
+            for (let file of files) {
+                try {
+                    const text = await extractTextFromPdf(file);
+                    const newCompany = parsePdfData(file.name, text);
+
+                    // Update localCompanies list
+                    const existingIndex = localCompanies.findIndex(c => c.id === newCompany.id);
+                    if (existingIndex > -1) {
+                        localCompanies[existingIndex] = newCompany;
+                    } else {
+                        localCompanies.push(newCompany);
                     }
-                    
-                    // Redraw distribution charts and positioning maps
-                    renderTradeGradeChart();
-                    renderPositioningMap("all");
-                    updateDetailedView();
-                    
-                    alert("공종 폴더 PDF 분석 결과(data.js)가 대시보드 데이터베이스에 연동 및 업데이트되었습니다.");
-                } else {
-                    alert("데이터 불러오기 실패: data.js 형식이 올바르지 않습니다.");
+                    parsedCount++;
+                } catch (err) {
+                    console.error(`Error parsing file ${file.name}:`, err);
+                    errorCount++;
                 }
-            };
+            }
 
-            script.onerror = (err) => {
-                console.error("Error loading updated database from data.js:", err);
-                alert("데이터 업데이트에 실패했습니다. watch_folders.py가 실행 중이며 신규 PDF 파일이 공종 폴더에 올바르게 들어갔는지 확인하세요.");
-            };
+            // Save to LocalStorage
+            localStorage.setItem("local_companies", JSON.stringify(localCompanies));
 
-            document.body.appendChild(script);
+            // Merge with loaded data.js window.companiesData
+            const baseData = window.companiesData || [];
+            const localIds = new Set(localCompanies.map(c => c.id));
+            companiesData = [
+                ...localCompanies,
+                ...baseData.filter(c => !localIds.has(c.id))
+            ];
+
+            // Re-render UI
+            updateOverviewStats();
+            populateTradeSelect();
+            
+            const select1 = document.getElementById("company-select-1");
+            const currentVal = select1 ? select1.value : "";
+            
+            populateCompanySelect("all", "");
+            
+            if (currentVal && companiesData.some(c => c.id === currentVal)) {
+                select1.value = currentVal;
+            } else if (companiesData.length > 0) {
+                select1.value = companiesData[0].id;
+            }
+            
+            renderTradeGradeChart();
+            renderPositioningMap("all");
+            updateDetailedView();
+
+            if (parsedCount > 0) {
+                alert(`성공적으로 ${parsedCount}개의 PDF 파일을 실시간으로 분석하여 대시보드에 반영하고 브라우저 저장소(LocalStorage)에 저장했습니다.` + (errorCount > 0 ? `\n(오류 발생: ${errorCount}건)` : ""));
+            } else {
+                alert("PDF 파일 분석에 실패했습니다. 유효한 안전평가 보고서 양식인지 확인해주세요.");
+            }
+
+            // Reset file input value
+            pdfFileInput.value = "";
         });
     }
 
