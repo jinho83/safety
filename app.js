@@ -1951,7 +1951,7 @@ function parsePdfData(filename, relativePath, text) {
         trade = defaultMeta.trade;
     }
 
-    const isNice = (text.includes("나이스디앤비") || text.includes("SA")) && !text.includes("이크레더블");
+    const isNice = text.includes("나이스디앤비") || (text.includes("SA") && !text.includes("이크레더블"));
     const sourceType = isNice ? "나이스디앤비" : "이크레더블";
 
     let totalScore = 0.0;
@@ -1961,34 +1961,34 @@ function parsePdfData(filename, relativePath, text) {
     let rawScores = {};
 
     if (!isNice) {
-        const scoreMatch = text.match(/SH\s+Score\s*(\d+\.?\d*)/);
+        const scoreMatch = text.match(/SH\s*Score\s*(\d+\.?\d*)/i);
         if (scoreMatch) {
             totalScore = parseFloat(scoreMatch[1]);
         } else {
-            const scoreMatchAlt1 = text.match(/평가\s*결과\s*합계\s*\(중대재해\s*벌점\s*반영\)\s*(\d+\.?\d*)/);
+            const scoreMatchAlt1 = text.match(/평가\s*결과\s*합계\s*\(\s*중대재해\s*벌점\s*반영\s*\)\s*(\d+\.?\d*)/);
             if (scoreMatchAlt1) {
                 totalScore = parseFloat(scoreMatchAlt1[1]);
             } else {
-                const scoreMatchAlt2 = text.match(/(?:SH\d\s*\/\s*)?(\d+\.?\d*)\s*(?:\(\s*100\s*\)|\/\s*100)/);
+                const scoreMatchAlt2 = text.match(/(?:SH\s*\d\s*\/\s*)?(\d+\.?\d*)\s*(?:\(\s*100\s*\)|\/\s*100)/i);
                 if (scoreMatchAlt2) {
                     totalScore = parseFloat(scoreMatchAlt2[1]);
                 }
             }
         }
 
-        const gradeMatch = text.match(/안전보건\(SH\)\s*평가\s*결과\s*(SH\d)/) || 
-                           text.match(/등급\(Grade\)\s*(SH\d)/) || 
-                           text.match(/평가\s*결과\s*(SH\d)\s*등급/);
+        const gradeMatch = text.match(/안전보건\s*\(\s*SH\s*\)\s*평가\s*결과\s*(SH\s*\d)/i) || 
+                           text.match(/등급\s*\(\s*Grade\s*\)\s*(SH\s*\d)/i) || 
+                           text.match(/평가\s*결과\s*(SH\s*\d)\s*등급/i);
         if (gradeMatch) {
-            sourceGrade = gradeMatch[1];
+            sourceGrade = gradeMatch[1].replace(/\s+/g, "");
         } else {
-            const fallbackMatch = text.match(/SH(\d)/);
+            const fallbackMatch = text.match(/SH\s*(\d)/i);
             if (fallbackMatch) {
                 sourceGrade = "SH" + fallbackMatch[1];
             }
         }
 
-        const expiryMatch = text.match(/유효기간\s*(\d{4})\.(\d{2})\.(\d{2})\s*~\s*(\d{4})\.(\d{2})\.(\d{2})/);
+        const expiryMatch = text.match(/유효기간\s*(\d{4})\s*\.\s*(\d{2})\s*\.\s*(\d{2})\s*~\s*(\d{4})\s*\.\s*(\d{2})\s*\.\s*(\d{2})/);
         if (expiryMatch) {
             expiryDate = `${expiryMatch[4]}-${expiryMatch[5]}-${expiryMatch[6]}`;
         }
@@ -2020,7 +2020,7 @@ function parsePdfData(filename, relativePath, text) {
         normScores.risk = Math.round((raw_r / 10.0) * 100 * 10) / 10;
         normScores.performance = Math.round((raw_p / 15.0) * 100 * 10) / 10;
     } else {
-        const scoreMatch = text.match(/SA\d+등급\((\d+)점\)/);
+        const scoreMatch = text.match(/SA\s*\d+\s*등급\s*\(\s*(\d+)\s*점\s*\)/i) || text.match(/SA\s*\d+\s*등급\s*(\d+)\s*점/i);
         if (scoreMatch) {
             totalScore = parseFloat(scoreMatch[1]);
         } else {
@@ -2030,12 +2030,12 @@ function parsePdfData(filename, relativePath, text) {
             }
         }
 
-        const gradeMatch = text.match(/SA(\d)등급/);
+        const gradeMatch = text.match(/SA\s*(\d)\s*등급/i);
         if (gradeMatch) {
             sourceGrade = "SA" + gradeMatch[1];
         }
 
-        const expiryMatch = text.match(/유효기간\s*:\s*(\d{4})\.(\d{2})\.(\d{2})\s*~\s*(\d{4})\.(\d{2})\.(\d{2})/);
+        const expiryMatch = text.match(/유효기간\s*:\s*(\d{4})\s*\.\s*(\d{2})\s*\.\s*(\d{2})\s*~\s*(\d{4})\s*\.\s*(\d{2})\s*\.\s*(\d{2})/);
         if (expiryMatch) {
             expiryDate = `${expiryMatch[4]}-${expiryMatch[5]}-${expiryMatch[6]}`;
         }
