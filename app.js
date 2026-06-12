@@ -1903,7 +1903,7 @@ function getCreditScoreFromGrade(grade) {
     return mapping[grade.toUpperCase().trim()] || 60;
 }
 
-function parsePdfData(filename, text) {
+function parsePdfData(filename, relativePath, text) {
     const companyName = filename.replace(/\.pdf$/i, "");
     let companyId = "";
     if (companyName.includes("두리")) companyId = "duric";
@@ -1936,8 +1936,16 @@ function parsePdfData(filename, text) {
     const creditScore = defaultMeta.creditScore || getCreditScoreFromGrade(creditGrade);
 
     let trade = "철근콘크리트(건축)";
-    if (flatText.includes("토공") || companyName.includes("토건")) {
-        trade = "토공사";
+    if (relativePath) {
+        // Standardize path separator to slash
+        const normalizedPath = relativePath.replace(/\\/g, '/');
+        const parts = normalizedPath.split('/');
+        if (parts.length >= 2) {
+            const parentDir = parts[parts.length - 2];
+            if (parentDir && parentDir !== "공종") {
+                trade = parentDir;
+            }
+        }
     }
     if (defaultMeta.trade) {
         trade = defaultMeta.trade;
@@ -2199,7 +2207,7 @@ function setupDBUpdateAndExport() {
                 }
                 try {
                     const text = await extractTextFromPdf(file);
-                    const newCompany = parsePdfData(file.name, text);
+                    const newCompany = parsePdfData(file.name, file.webkitRelativePath, text);
 
                     // Update localCompanies list
                     const existingIndex = localCompanies.findIndex(c => c.id === newCompany.id);
